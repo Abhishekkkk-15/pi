@@ -5,6 +5,7 @@ from enum import Enum
 from dotenv import load_dotenv
 from models import Role,Message
 from tools import TOOLS, dispatch_tool_call
+from console import get_console
 
 import json
 load_dotenv()
@@ -20,6 +21,7 @@ class Agent:
         self.messages:list[Message]  =  [
             Message(role=Role.SYSTEM,content=self.prompt.prompts[0])
         ]
+        self.console = get_console()
     def chat(self, user_query:str):
         
         self.messages.append(Message(role=Role.USER, content=user_query))
@@ -46,8 +48,9 @@ class Agent:
                 for tool in llm_res.message.tool_calls:  # type: ignore
                     tool_name = tool.function.name
                     tool_arguments = tool.function.arguments
-                    print(f"calling tool : {tool_name} with arguments : {tool_arguments}")
+                    self.console.print_tool_call(tool_name, tool_arguments)
                     fn_output = dispatch_tool_call(tool_name,tool_arguments)  # type: ignore
+                    self.console.print_tool_result(fn_output)
                     api_messages.append({
                         "role":"tool",
                         "content":fn_output,
