@@ -38,7 +38,7 @@ def execute_edit(path: str, edits: List[Dict[str, str]]) -> str:
         filepath = Path(path)
         if not filepath.exists():
             return f"Error: File '{path}' does not exist."
-
+        
         content = filepath.read_text(encoding="utf-8")
 
         for i, edit in enumerate(edits):
