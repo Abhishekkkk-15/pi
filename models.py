@@ -19,4 +19,4 @@ class Message:
 
 class Models(Enum):
     EMBEED = "mistral-embed"
-    CHAT = "mistral-medium-3-5"
+    CHAT = "mistral-medium-latest"

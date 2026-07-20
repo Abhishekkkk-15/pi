@@ -69,23 +69,33 @@ def execute_edit(path: str, edits: List[Dict[str, str]]) -> str:
         return f"Error editing file '{path}': {str(e)}"
 
 
-def execute_bash(command: str, timeout: int = 60) -> str:
-    """Executes a bash command and returns stdout + stderr."""
+def execute_bash(command: str, timeout: int = 120) -> str:
+    """Executes a terminal command cross-platform with UTF-8 decoding."""
     try:
-        
+        env = os.environ.copy()
+        env["CI"] = "true"
+        env["DEBIAN_FRONTEND"] = "noninteractive"
+        # Prevents interactive npm/npx prompts on Windows
+        env["npm_config_yes"] = "true"
+
         res = subprocess.run(
             command,
             shell=True,
             capture_output=True,
             text=True,
-            timeout=timeout
+            # Explicitly force utf-8 decoding with fallback replacement
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env=env
         )
         output = res.stdout + res.stderr
         return output.strip() if output else "[Command finished with no output]"
+
     except subprocess.TimeoutExpired:
         return f"Error: Command timed out after {timeout} seconds."
     except Exception as e:
-        return f"Error executing bash command: {str(e)}"
+        return f"Error executing command: {str(e)}"
 
 
 def dispatch_tool_call(tool_name:str, function_arguments:str):

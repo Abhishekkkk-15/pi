@@ -34,8 +34,7 @@ class Prompt:
         return ET.tostring(root, encoding="unicode")
     
     def read_file_content(self,path:str) -> str:
-        cwd = Path.cwd()
-        print(cwd) 
+   
         with open(path, "r", encoding="utf-8") as file:
             return file.read()
     

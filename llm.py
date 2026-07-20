@@ -48,7 +48,7 @@ class Agent:
                 for tool in llm_res.message.tool_calls:  # type: ignore
                     tool_name = tool.function.name
                     tool_arguments = tool.function.arguments
-                    self.console.print_tool_call(tool_name, tool_arguments)
+                    self.console.print_tool_call(tool_name, tool_arguments)  # type: ignore
                     fn_output = dispatch_tool_call(tool_name,tool_arguments)  # type: ignore
                     self.console.print_tool_result(fn_output)
                     api_messages.append({
@@ -60,9 +60,6 @@ class Agent:
                 return res.choices[0]        
             # api_messages.append()
             
-
-        
-        
     def send(self, user_query):
      
         return self.chat(user_query)
