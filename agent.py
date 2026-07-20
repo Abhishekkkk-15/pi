@@ -7,7 +7,7 @@ def main():
         user_qyery = input("Enter your task : ")
     
   
-        print(agent.send(user_qyery).choices[0].message.content)
+        print(agent.send(user_qyery).choices[0].message.content) # type: ignore
 
 
 if __name__ == "__main__":

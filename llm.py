@@ -6,8 +6,7 @@ from dotenv import load_dotenv
 from  dataclasses import dataclass
 from models import Role,Message,Models
 load_dotenv()
-
-
+from mistralai import extra
 
 api_key = os.getenv("LLM_KEY")
 
@@ -24,7 +23,7 @@ class Agent:
         api_messages = [msg.to_dict() for msg in self.messages]
         res = self.client.chat.complete(
             model=self.model,
-            messages=api_messages
+            messages=api_messages # type: ignore
         )
         return res.choices[0]
         
@@ -39,7 +38,7 @@ class Agent:
         api_messages = [user_message.to_dict()]
         return self.client.chat.complete(
             model=self.model,
-            messages=api_messages
+            messages=api_messages # type: ignore
         )
 
 
