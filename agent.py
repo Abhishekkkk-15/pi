@@ -31,6 +31,7 @@ def main():
             
             # Show loading indicator
             with console.print_loading("Processing your request..."):
+                print(agent.messages)
                 response = agent.send(user_query)
             
             # Print assistant response

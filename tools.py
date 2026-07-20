@@ -72,6 +72,7 @@ def execute_edit(path: str, edits: List[Dict[str, str]]) -> str:
 def execute_bash(command: str, timeout: int = 60) -> str:
     """Executes a bash command and returns stdout + stderr."""
     try:
+        
         res = subprocess.run(
             command,
             shell=True,
