@@ -4,13 +4,14 @@ import prompts
 from enum import Enum
 from dotenv import load_dotenv
 from models import Role,Message, Session
-from tools import TOOLS, dispatch_tool_call
+from tools import TOOLS
 from console import get_console
 from config import Config
 from memory import Memory
 from dataclasses import asdict
 load_dotenv()
-
+import json
+from tools import *
 api_key = os.getenv("LLM_KEY")
 
 
@@ -18,7 +19,7 @@ class Agent:
     def __init__(self):
         config = Config()
         self.config = config
-       
+        self.console = get_console() 
         self.client = Mistral(api_key=api_key)
         self.prompt = prompts.Prompt()
         self.memory:Memory = Memory() 
@@ -54,7 +55,7 @@ class Agent:
                     tool_name = tool.function.name
                     tool_arguments = tool.function.arguments
                     self.console.print_tool_call(tool_name, tool_arguments)  # type: ignore
-                    fn_output = dispatch_tool_call(tool_name, tool_arguments)  # type: ignore
+                    fn_output = self.dispatch_tool_call(tool_name, tool_arguments)  # type: ignore
                     self.console.print_tool_result(fn_output)
                     tool_msg = Message(
                         role=Role.TOOL,
@@ -73,5 +74,31 @@ class Agent:
     def send(self, user_query):
      
         return self.chat(user_query)
+
+    
+    def dispatch_tool_call(self,tool_name:str, function_arguments:str):
+        args = json.loads(function_arguments)
+        if tool_name == "read":
+            if not self.console.confirm_permission(f"Agent want to read {args["path"]}"):
+                return "User permission deined"
+            return execute_read(args["path"])
+
+        elif tool_name == "write":
+            if not self.console.confirm_permission(f"Agent want to {tool_name} {args["path"]}"):
+                return "User permission deined"
+            return execute_write(args["path"], args["content"])
+
+        elif tool_name == "edit":
+            if not self.console.confirm_permission(f"Agent want to {tool_name} {args["path"]}"):
+                return "User permission deined"
+            return execute_edit(args["path"], args["edits"])
+
+        elif tool_name == "bash":
+            if not self.console.confirm_permission(f"Agent want's to run {tool_name} {args["command"]}"):
+                return "User permission deined"
+            return execute_bash(args["command"])
+
+        else:
+            return f"Unknown tool: {tool_name}"
 
 

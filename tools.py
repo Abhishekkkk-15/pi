@@ -2,7 +2,6 @@ import os
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Any
-import json
 def execute_read(path: str) -> str:
     """Reads and returns the contents of a text file."""
     try:
@@ -98,23 +97,6 @@ def execute_bash(command: str, timeout: int = 120) -> str:
         return f"Error executing command: {str(e)}"
 
 
-def dispatch_tool_call(tool_name:str, function_arguments:str):
-    args = json.loads(function_arguments)
-    if tool_name == "read":
-        return execute_read(args["path"])
-    
-    elif tool_name == "write":
-        return execute_write(args["path"], args["content"])
-    
-    elif tool_name == "edit":
-        return execute_edit(args["path"], args["edits"])
-    
-    elif tool_name == "bash":
-        return execute_bash(args["command"])
-    
-    else:
-        return f"Unknown tool: {tool_name}"
-    
 
 TOOLS = [
     {

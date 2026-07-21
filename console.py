@@ -1,4 +1,3 @@
-
 from contextlib import contextmanager  
 import sys
 import os
@@ -7,7 +6,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 from rich.syntax import Syntax
-from rich.prompt import Prompt
+from rich.prompt import Prompt, Confirm
 from rich.live import Live
 from rich.spinner import Spinner
 from rich.markdown import Markdown
@@ -58,7 +57,6 @@ class ConsoleUI:
     def print_assistant_message(self, message: str, is_code: bool = False):
         """Print assistant response with proper formatting"""
         if is_code:
-            # Try to detect language and apply syntax highlighting
             try:
                 syntax = Syntax(message, "python", theme="monokai", line_numbers=True)
                 self.console.print(
@@ -70,7 +68,6 @@ class ConsoleUI:
                     )
                 )
             except:
-                # Fallback to regular text
                 self.console.print(
                     Panel(
                         Text(message, style="white"),
@@ -80,7 +77,6 @@ class ConsoleUI:
                     )
                 )
         else:
-            # Try to render as markdown
             try:
                 md = Markdown(message)
                 self.console.print(
@@ -129,14 +125,14 @@ class ConsoleUI:
             )
         )
     
-    def print_welcome(self,title:str = " ",ws_path:str = ""):
+    def print_welcome(self, title: str = " ", ws_path: str = ""):
         """Print welcome message"""
         welcome_text = Text()
         welcome_text.append("\n")
         welcome_text.append("  PI - Python Agent Harness  ", style="bold white on blue")
         if title and ws_path:
-             welcome_text.append("\n")
-             welcome_text.append(f"Title: {title} \n Workspace : {ws_path} ", style="bold cyan")
+            welcome_text.append("\n")
+            welcome_text.append(f"Title: {title} \n Workspace : {ws_path} ", style="bold cyan")
         welcome_text.append("\n")
         welcome_text.append("  Type 'exit' or 'quit' to end session  ", style="dim")
         welcome_text.append("\n")
@@ -152,7 +148,6 @@ class ConsoleUI:
     def get_user_input(self, prompt: str = "Enter your task") -> str:
         """Get user input with history and auto-suggest"""
         try:
-            # Use prompt_toolkit for better input experience
             user_input = PtPrompt(
                 f"{prompt} > ",
                 history=FileHistory(self.history_file),
@@ -162,7 +157,6 @@ class ConsoleUI:
             )
             return user_input.strip()
         except Exception as e:
-            # Fallback to regular input
             self.print_error(f"Advanced input failed: {str(e)}. Using basic input.")
             return input(f"{prompt} > ").strip()
     
@@ -170,7 +164,7 @@ class ConsoleUI:
         """Get completer for common commands"""
         class SimpleCompleter(Completer):
             def get_completions(self, document, complete_event):
-                commands = ["/resume","read", "write", "edit", "bash", "exit", "quit", "help", "clear"]
+                commands = ["/resume", "read", "write", "edit", "bash", "exit", "quit", "help", "clear"]
                 word = document.get_word_before_cursor()
                 for cmd in commands:
                     if cmd.startswith(word):
@@ -188,24 +182,20 @@ class ConsoleUI:
         self.print_welcome()
     
     def interactive_select(self, items: List[Session], title: str = "Select a session", prompt: str = "Enter number") -> Session:
-      
         if not items:
             raise ValueError("No items to select from")
 
-        # Show a title panel
         self.console.print(Panel(
             Text(title, style="bold cyan"),
             border_style="cyan",
             box=box.ROUNDED
         ))
 
-        # List items with numbers
         for i, item in enumerate(items, 1):
             self.console.print(f"[bold cyan]{i}.[/bold cyan] {item.title}")
 
-        self.console.print()  # empty line for spacing
+        self.console.print()
 
-        # Keep asking until a valid number is entered
         while True:
             try:
                 choice = Prompt.ask(f"{prompt}", console=self.console)
@@ -225,6 +215,7 @@ class ConsoleUI:
         except:
             self.console.print(f"[dim]Code block ({language}):[/dim]")
             self.console.print(code)
+
     def print_chat_history(self, messages: List["Message"]) -> None:
         """Print complete chat history with proper formatting for each role."""
         if not messages:
@@ -246,7 +237,6 @@ class ConsoleUI:
         )
     
         for msg in messages:
-            # Resolve string vs Enum representation for the role
             role_val = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
             role = role_val.lower()
     
@@ -260,7 +250,22 @@ class ConsoleUI:
                 self.print_tool_result(msg.content)
     
         self.print_separator()
-    
+
+    def confirm_permission(self, action_details: str, title: str = "Permission Required") -> bool:
+        """
+        Displays a styled permission prompt asking the user for confirmation.
+        Returns True if approved, False if denied.
+        """
+        self.console.print(
+            Panel(
+                Text(action_details, style="bold yellow"),
+                title=f"[bold red]⚠️  {title}[/bold red]",
+                border_style="red",
+                box=box.ROUNDED,
+            )
+        )
+        return Confirm.ask("Do you allow this action?", console=self.console, default=False)
+
 
 # Global console instance
 console_ui = ConsoleUI()
