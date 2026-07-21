@@ -6,16 +6,17 @@ from dotenv import load_dotenv
 from models import Role,Message
 from tools import TOOLS, dispatch_tool_call
 from console import get_console
-
-import json
+from config import Config
 load_dotenv()
 
 api_key = os.getenv("LLM_KEY")
 
 
 class Agent:
-    def __init__(self, model):
-        self.model = model
+    def __init__(self):
+        config = Config()
+        self.config = config
+       
         self.client = Mistral(api_key=api_key)
         self.prompt = prompts.Prompt()
         self.messages:list[Message]  =  [
@@ -33,7 +34,7 @@ class Agent:
         while True:
             
             res = self.client.chat.complete(
-                model=self.model,
+                model=self.config.model as str,
                 messages=api_messages, # type: ignore
                 tools=TOOLS # type: ignore
             )

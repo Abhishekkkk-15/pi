@@ -8,7 +8,7 @@ install(show_locals=True)
 
 def main():
     console = get_console()
-    agent = llm.Agent(Models.CHAT)
+    agent = llm.Agent()
     
     # Print welcome message
     console.print_welcome()
