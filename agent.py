@@ -2,6 +2,7 @@ import llm
 from models import Models
 from rich.traceback import install
 from console import get_console
+from memory import Memory
 import sys
 
 install(show_locals=True)
@@ -9,7 +10,7 @@ install(show_locals=True)
 def main():
     console = get_console()
     agent = llm.Agent()
-    
+    memory = Memory()
     # Print welcome message
     console.print_welcome()
     
@@ -24,6 +25,14 @@ def main():
             
             if not user_query.strip():
                 continue
+              
+            if user_query == "/resume":
+                old_sessions = memory.load_old_sessions()    
+                selected_session=console.interactive_select(old_sessions)
+                console.clear_screen()
+                console.print_welcome()
+                print(selected_session)
+                
                 
             # Print user message
             console.print_user_message(user_query)
@@ -31,6 +40,14 @@ def main():
             
             # Show loading indicator
             with console.print_loading("Processing your request..."):
+                if not agent.current_session :
+                    session  = memory.init_session(user_query) 
+                    agent.current_session = session# type: ignore
+                    console.clear_screen()
+                    console.print_welcome(session.title,str(session.workspace))
+                    
+                    console.print_system_message("New Conversation started")
+                    
                 response = agent.send(user_query)
             
             # Print assistant response

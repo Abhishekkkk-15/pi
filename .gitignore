@@ -11,3 +11,4 @@ wheels/
 .env
 web/
 .pi_history
+.memory/

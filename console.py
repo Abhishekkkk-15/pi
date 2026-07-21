@@ -21,7 +21,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import Completer, Completion
 from pathlib import Path
-
+from models import Session
 
 class ConsoleUI:
     """Enhanced console interface for the pi agent"""
@@ -133,13 +133,14 @@ class ConsoleUI:
             )
         )
     
-    def print_welcome(self):
+    def print_welcome(self,title:str = " ",ws_path:str = ""):
         """Print welcome message"""
         welcome_text = Text()
         welcome_text.append("\n")
         welcome_text.append("  PI - Python Agent Harness  ", style="bold white on blue")
-        welcome_text.append("\n")
-        welcome_text.append("  Enhanced Console Interface  ", style="bold cyan")
+        if title and ws_path:
+             welcome_text.append("\n")
+             welcome_text.append(f"Title: {title} \n Workspace : {ws_path} ", style="bold cyan")
         welcome_text.append("\n")
         welcome_text.append("  Type 'exit' or 'quit' to end session  ", style="dim")
         welcome_text.append("\n")
@@ -172,8 +173,8 @@ class ConsoleUI:
     def _get_completer(self) -> Completer:
         """Get completer for common commands"""
         class SimpleCompleter(Completer):
-            def get_completions(self, document, complete_event) -> List[Completion]:
-                commands = ["read", "write", "edit", "bash", "exit", "quit", "help", "clear"]
+            def get_completions(self, document, complete_event):
+                commands = ["/resume","read", "write", "edit", "bash", "exit", "quit", "help", "clear"]
                 word = document.get_word_before_cursor()
                 for cmd in commands:
                     if cmd.startswith(word):
@@ -185,10 +186,40 @@ class ConsoleUI:
         """Print a separator line"""
         self.console.print("─" * self.console.width, style="dim")
     
-    def clear_screen(self):
+    def clear_screen(self): 
         """Clear the console screen"""
         self.console.clear()
         self.print_welcome()
+    
+    def interactive_select(self, items: List[Session], title: str = "Select a session", prompt: str = "Enter number") -> str:
+      
+        if not items:
+            raise ValueError("No items to select from")
+
+        # Show a title panel
+        self.console.print(Panel(
+            Text(title, style="bold cyan"),
+            border_style="cyan",
+            box=box.ROUNDED
+        ))
+
+        # List items with numbers
+        for i, item in enumerate(items, 1):
+            self.console.print(f"[bold cyan]{i}.[/bold cyan] {item.title}")
+
+        self.console.print()  # empty line for spacing
+
+        # Keep asking until a valid number is entered
+        while True:
+            try:
+                choice = Prompt.ask(f"{prompt}", console=self.console)
+                idx = int(choice) - 1
+                if 0 <= idx < len(items):
+                    return items[idx].id
+                else:
+                    self.print_error(f"Invalid selection. Choose a number between 1 and {len(items)}.")
+            except ValueError:
+                self.print_error("Please enter a valid number.")
     
     def print_code_block(self, code: str, language: str = "python"):
         """Print a code block with syntax highlighting"""
@@ -199,6 +230,7 @@ class ConsoleUI:
             self.console.print(f"[dim]Code block ({language}):[/dim]")
             self.console.print(code)
 
+    
 
 # Global console instance
 console_ui = ConsoleUI()
