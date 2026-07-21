@@ -2,7 +2,7 @@ import llm
 from models import Models
 from rich.traceback import install
 from console import get_console
-from memory import Memory
+
 import sys
 
 install(show_locals=True)
@@ -10,7 +10,7 @@ install(show_locals=True)
 def main():
     console = get_console()
     agent = llm.Agent()
-    memory = Memory()
+    
     # Print welcome message
     console.print_welcome()
     
@@ -27,12 +27,19 @@ def main():
                 continue
               
             if user_query == "/resume":
-                old_sessions = memory.load_old_sessions()    
-                selected_session=console.interactive_select(old_sessions)
+                old_sessions = agent.memory.load_old_sessions()
+                if not old_sessions:
+                    console.print_system_message("No previous sessions found.", "Resume")
+                    continue
+                selected_session = console.interactive_select(old_sessions)
                 console.clear_screen()
-                console.print_welcome()
-                print(selected_session)
+                old_chats = agent.memory.load_session_chat(selected_session.history_path)
+                agent.memory.session = selected_session
+                console.print_welcome(selected_session.title, str(selected_session.workspace))
+                console.print_chat_history(old_chats)
+                console.print_system_message(f"Resumed session: {selected_session.title}")
                 
+                continue
                 
             # Print user message
             console.print_user_message(user_query)
@@ -40,12 +47,11 @@ def main():
             
             # Show loading indicator
             with console.print_loading("Processing your request..."):
-                if not agent.current_session :
-                    session  = memory.init_session(user_query) 
-                    agent.current_session = session# type: ignore
+                if agent.memory.session is None:
+                    session = agent.memory.init_session(user_query) 
+                    agent.current_session = session  # type: ignore
                     console.clear_screen()
-                    console.print_welcome(session.title,str(session.workspace))
-                    
+                    console.print_welcome(session.title, str(session.workspace))
                     console.print_system_message("New Conversation started")
                     
                 response = agent.send(user_query)

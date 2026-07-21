@@ -1,9 +1,5 @@
-"""
-Enhanced Console UI for pi-python agent
-Provides rich formatting, command history, and better UX
-"""
-from contextlib import contextmanager   # add at top
 
+from contextlib import contextmanager  
 import sys
 import os
 from typing import Optional, List
@@ -191,7 +187,7 @@ class ConsoleUI:
         self.console.clear()
         self.print_welcome()
     
-    def interactive_select(self, items: List[Session], title: str = "Select a session", prompt: str = "Enter number") -> str:
+    def interactive_select(self, items: List[Session], title: str = "Select a session", prompt: str = "Enter number") -> Session:
       
         if not items:
             raise ValueError("No items to select from")
@@ -215,7 +211,7 @@ class ConsoleUI:
                 choice = Prompt.ask(f"{prompt}", console=self.console)
                 idx = int(choice) - 1
                 if 0 <= idx < len(items):
-                    return items[idx].id
+                    return items[idx]
                 else:
                     self.print_error(f"Invalid selection. Choose a number between 1 and {len(items)}.")
             except ValueError:
@@ -229,7 +225,41 @@ class ConsoleUI:
         except:
             self.console.print(f"[dim]Code block ({language}):[/dim]")
             self.console.print(code)
-
+    def print_chat_history(self, messages: List["Message"]) -> None:
+        """Print complete chat history with proper formatting for each role."""
+        if not messages:
+            self.console.print(
+                Panel(
+                    Text("No chat history found.", style="dim italic"),
+                    border_style="dim",
+                    box=box.ROUNDED,
+                )
+            )
+            return
+    
+        self.console.print(
+            Panel(
+                Text("Chat History", style="bold cyan"),
+                border_style="cyan",
+                box=box.ROUNDED,
+            )
+        )
+    
+        for msg in messages:
+            # Resolve string vs Enum representation for the role
+            role_val = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+            role = role_val.lower()
+    
+            if role == "user":
+                self.print_user_message(msg.content)
+            elif role in ("assistant", "model"):
+                self.print_assistant_message(msg.content)
+            elif role == "system":
+                self.print_system_message(msg.content, title="System Instruction")
+            elif role == "tool":
+                self.print_tool_result(msg.content)
+    
+        self.print_separator()
     
 
 # Global console instance
