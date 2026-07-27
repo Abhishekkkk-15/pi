@@ -135,4 +135,4 @@ class Memory:
                     )
                     messages.append(message)
 
-        return messages
+        return messages[-15:]

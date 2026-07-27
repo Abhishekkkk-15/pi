@@ -67,6 +67,38 @@ def sanitize_api_messages(raw_messages: list[dict]) -> list[dict]:
     return sanitized
 
 
+def apply_sliding_window(raw_messages: list[dict], max_history: int = 20) -> list[dict]:
+    """
+    Applies a sliding window to conversation history:
+    1. Always preserves the System prompt (index 0).
+    2. Keeps the most recent messages up to max_history.
+    3. Aligns the window start to a User turn to avoid breaking tool call contexts.
+    4. Passes the result through sanitize_api_messages to guarantee API compliance.
+    """
+    if len(raw_messages) <= max_history:
+        return sanitize_api_messages(raw_messages)
+
+    sys_msg = None
+    history = raw_messages
+
+    if raw_messages and raw_messages[0].get("role") == "system":
+        sys_msg = raw_messages[0]
+        history = raw_messages[1:]
+
+    target_count = max_history - (1 if sys_msg else 0)
+    start_idx = max(0, len(history) - target_count)
+
+    orig_start = start_idx
+    while start_idx < len(history) and history[start_idx].get("role") != "user":
+        start_idx += 1
+
+    if start_idx >= len(history):
+        start_idx = orig_start
+
+    window = [sys_msg] + history[start_idx:] if sys_msg else history[start_idx:]
+    return sanitize_api_messages(window)
+
+
 class Agent:
     def __init__(self):
         config = Config()
@@ -85,7 +117,8 @@ class Agent:
             self.memory.write_to_jsonl(self.memory.session.history_path, [user_msg], mode="a")
         
         while True:
-            api_messages = sanitize_api_messages([f.to_dict() for f in self.memory.messages])
+            raw_dicts = [f.to_dict() for f in self.memory.messages]
+            api_messages = apply_sliding_window(raw_dicts, max_history=self.config.max_history_messages)
             res = self.client.chat.complete(  # type: ignore
                 model=self.config.model, # type: ignore
                 messages=api_messages, # type: ignore
