@@ -147,9 +147,13 @@ class Agent:
             return execute_edit(args["path"], args["edits"])
 
         elif tool_name == "bash":
-            if not self.console.confirm_permission(f"Agent want's to run {tool_name} {args["command"]}"):
-                return "User permission deined"
-            return execute_bash(args["command"])
+            cmd = args.get("command", "")
+            timeout = args.get("timeout", 30)
+            is_bg = args.get("is_background", False)
+            bg_note = " (background)" if is_bg else ""
+            if not self.console.confirm_permission(f"Agent wants to run {tool_name}{bg_note}: {cmd}"):
+                return "User permission denied"
+            return execute_bash(cmd, timeout=timeout, is_background=is_bg)
 
         else:
             return f"Unknown tool: {tool_name}"

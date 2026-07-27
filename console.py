@@ -1,7 +1,7 @@
 from contextlib import contextmanager  
 import sys
 import os
-from typing import Optional, List
+from typing import Optional, List, Any
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -25,13 +25,93 @@ class ConsoleUI:
         self.console = Console()
         self.history_file = history_file
         self._setup_history()
+        self._current_live: Optional[Live] = None
         
     def _setup_history(self):
         """Setup command history file"""
         history_path = Path(self.history_file)
         if not history_path.exists():
             history_path.touch()
+
+    def _get_completer(self) -> Completer:
+        """Get completer for common commands"""
+        class SimpleCompleter(Completer):
+            def get_completions(self, document, complete_event):
+                commands = ["/resume", "read", "write", "edit", "bash", "exit", "quit", "help", "clear"]
+                word = document.get_word_before_cursor()
+                for cmd in commands:
+                    if cmd.startswith(word):
+                        yield Completion(cmd, start_position=-len(word))
+        
+        return SimpleCompleter()
+
+    def start_loading(self, message: str = "Thinking..."):
+        """Start loading spinner if not already running."""
+        if self._current_live is None:
+            self._current_live = Live(Spinner("dots", text=message), console=self.console, refresh_per_second=10)
+            self._current_live.start()
+
+    def stop_loading(self):
+        """Stop loading spinner if active."""
+        if self._current_live is not None:
+            try:
+                self._current_live.stop()
+            except Exception:
+                pass
+            self._current_live = None
+
+    @contextmanager
+    def print_loading(self, message: str = "Thinking..."):
+        """Show loading spinner safely without overlapping interactive prompts."""
+        self.start_loading(message)
+        try:
+            yield self._current_live
+        finally:
+            self.stop_loading()
     
+    def get_user_input(self, prompt: str = "Enter your task") -> str:
+        """Get user input with history and auto-suggest"""
+        self.stop_loading()
+        try:
+            user_input = PtPrompt(
+                f"{prompt} > ",
+                history=FileHistory(self.history_file),
+                auto_suggest=AutoSuggestFromHistory(),
+                completer=self._get_completer(),
+                complete_while_typing=True
+            )
+            return user_input.strip()
+        except Exception as e:
+            self.print_error(f"Advanced input failed: {str(e)}. Using basic input.")
+            return input(f"{prompt} > ").strip()
+    
+    def interactive_select(self, items: List[Session], title: str = "Select a session", prompt: str = "Enter number") -> Session:
+        self.stop_loading()
+        if not items:
+            raise ValueError("No items to select from")
+
+        self.console.print(Panel(
+            Text(title, style="bold cyan"),
+            border_style="cyan",
+            box=box.ROUNDED
+        ))
+
+        for i, item in enumerate(items, 1):
+            self.console.print(f"[bold cyan]{i}.[/bold cyan] {item.title}")
+
+        self.console.print()
+
+        while True:
+            try:
+                choice = Prompt.ask(f"{prompt}", console=self.console)
+                idx = int(choice) - 1
+                if 0 <= idx < len(items):
+                    return items[idx]
+                else:
+                    self.print_error(f"Invalid selection. Choose a number between 1 and {len(items)}.")
+            except ValueError:
+                self.print_error("Please enter a valid number.")
+
     def print_system_message(self, message: str, title: str = "System"):
         """Print a system message in a styled panel"""
         self.console.print(
@@ -139,39 +219,31 @@ class ConsoleUI:
         
         self.console.print(Panel(welcome_text, box=box.DOUBLE))
         
-    @contextmanager
-    def print_loading(self, message: str = "Thinking..."):
-        """Show loading spinner"""
-        with Live(Spinner("dots", text=message), console=self.console) as live:
-            yield live
-    
-    def get_user_input(self, prompt: str = "Enter your task") -> str:
-        """Get user input with history and auto-suggest"""
-        try:
-            user_input = PtPrompt(
-                f"{prompt} > ",
-                history=FileHistory(self.history_file),
-                auto_suggest=AutoSuggestFromHistory(),
-                completer=self._get_completer(),
-                complete_while_typing=True
+    def confirm_permission(self, action_details: str, title: str = "Permission Required") -> bool:
+        """
+        Displays a styled permission prompt asking the user for confirmation.
+        Returns True if approved, False if denied.
+        Pauses any active loading spinner to prevent rendering overlap with the prompt.
+        """
+        was_loading = self._current_live is not None
+        if was_loading:
+            self.stop_loading()
+
+        self.console.print(
+            Panel(
+                Text(action_details, style="bold yellow"),
+                title=f"[bold red]⚠️  {title}[/bold red]",
+                border_style="red",
+                box=box.ROUNDED,
             )
-            return user_input.strip()
-        except Exception as e:
-            self.print_error(f"Advanced input failed: {str(e)}. Using basic input.")
-            return input(f"{prompt} > ").strip()
-    
-    def _get_completer(self) -> Completer:
-        """Get completer for common commands"""
-        class SimpleCompleter(Completer):
-            def get_completions(self, document, complete_event):
-                commands = ["/resume", "read", "write", "edit", "bash", "exit", "quit", "help", "clear"]
-                word = document.get_word_before_cursor()
-                for cmd in commands:
-                    if cmd.startswith(word):
-                        yield Completion(cmd, start_position=-len(word))
-        
-        return SimpleCompleter()
-    
+        )
+        res = Confirm.ask("Do you allow this action?", console=self.console, default=False)
+
+        if was_loading:
+            self.start_loading("Processing your request...")
+
+        return res
+
     def print_separator(self):
         """Print a separator line"""
         self.console.print("─" * self.console.width, style="dim")
@@ -180,33 +252,7 @@ class ConsoleUI:
         """Clear the console screen"""
         self.console.clear()
         self.print_welcome()
-    
-    def interactive_select(self, items: List[Session], title: str = "Select a session", prompt: str = "Enter number") -> Session:
-        if not items:
-            raise ValueError("No items to select from")
 
-        self.console.print(Panel(
-            Text(title, style="bold cyan"),
-            border_style="cyan",
-            box=box.ROUNDED
-        ))
-
-        for i, item in enumerate(items, 1):
-            self.console.print(f"[bold cyan]{i}.[/bold cyan] {item.title}")
-
-        self.console.print()
-
-        while True:
-            try:
-                choice = Prompt.ask(f"{prompt}", console=self.console)
-                idx = int(choice) - 1
-                if 0 <= idx < len(items):
-                    return items[idx]
-                else:
-                    self.print_error(f"Invalid selection. Choose a number between 1 and {len(items)}.")
-            except ValueError:
-                self.print_error("Please enter a valid number.")
-    
     def print_code_block(self, code: str, language: str = "python"):
         """Print a code block with syntax highlighting"""
         try:
@@ -216,7 +262,7 @@ class ConsoleUI:
             self.console.print(f"[dim]Code block ({language}):[/dim]")
             self.console.print(code)
 
-    def print_chat_history(self, messages: List["Message"]) -> None:
+    def print_chat_history(self, messages: List[Any]) -> None:
         """Print complete chat history with proper formatting for each role."""
         if not messages:
             self.console.print(
@@ -250,21 +296,6 @@ class ConsoleUI:
                 self.print_tool_result(msg.content)
     
         self.print_separator()
-
-    def confirm_permission(self, action_details: str, title: str = "Permission Required") -> bool:
-        """
-        Displays a styled permission prompt asking the user for confirmation.
-        Returns True if approved, False if denied.
-        """
-        self.console.print(
-            Panel(
-                Text(action_details, style="bold yellow"),
-                title=f"[bold red]⚠️  {title}[/bold red]",
-                border_style="red",
-                box=box.ROUNDED,
-            )
-        )
-        return Confirm.ask("Do you allow this action?", console=self.console, default=False)
 
 
 # Global console instance

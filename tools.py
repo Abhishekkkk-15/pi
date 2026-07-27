@@ -1,7 +1,23 @@
 import os
+import sys
+import time
+import threading
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Any
+
+
+def _kill_process_tree(pid: int):
+    """Terminates a process tree cleanly cross-platform."""
+    try:
+        if sys.platform == "win32":
+            subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, capture_output=True)
+        else:
+            os.kill(pid, 9)
+    except Exception:
+        pass
+
+
 def execute_read(path: str) -> str:
     """Reads and returns the contents of a text file."""
     try:
@@ -68,34 +84,98 @@ def execute_edit(path: str, edits: List[Dict[str, str]]) -> str:
         return f"Error editing file '{path}': {str(e)}"
 
 
-def execute_bash(command: str, timeout: int = 120) -> str:
-    """Executes a terminal command cross-platform with UTF-8 decoding."""
+def execute_bash(command: str, timeout: int = 30, is_background: bool = False) -> str:
+    """
+    Executes a terminal command cross-platform without hanging or freezing.
+    Auto-detects or handles long-running server commands (e.g. npm run dev, vite),
+    prevents interactive CLI prompt hangs using stdin=DEVNULL,
+    and kills processes cleanly on timeout to prevent lingering process leaks.
+    """
+    bg_keywords = [
+        "npm run dev", "npm start", "vite", "next dev", "ng serve",
+        "gatsby develop", "nodemon", "uvicorn", "gunicorn", "flask run",
+        "python -m http.server"
+    ]
+    command_lower = command.lower()
+    auto_bg = any(kw in command_lower for kw in bg_keywords)
+    should_run_bg = is_background or auto_bg
+
     try:
         env = os.environ.copy()
         env["CI"] = "true"
         env["DEBIAN_FRONTEND"] = "noninteractive"
-        # Prevents interactive npm/npx prompts on Windows
         env["npm_config_yes"] = "true"
+        env["NONINTERACTIVE"] = "1"
+        env["FORCE_COLOR"] = "0"
+        env["NO_COLOR"] = "1"
+        env["PIP_NO_INPUT"] = "1"
+        env["GIT_TERMINAL_PROMPT"] = "0"
 
-        res = subprocess.run(
+        creationflags = 0
+        if sys.platform == "win32" and should_run_bg:
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+
+        proc = subprocess.Popen(
             command,
             shell=True,
-            capture_output=True,
+            stdin=subprocess.DEVNULL,  # Prevents interactive CLI prompts from blocking on stdin
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            # Explicitly force utf-8 decoding with fallback replacement
             encoding="utf-8",
             errors="replace",
-            timeout=timeout,
-            env=env
+            env=env,
+            creationflags=creationflags
         )
-        output = res.stdout + res.stderr
+
+        stdout_lines: List[str] = []
+        stderr_lines: List[str] = []
+
+        def _read_stream(stream, output_list):
+            try:
+                for line in iter(stream.readline, ''):
+                    output_list.append(line)
+                stream.close()
+            except Exception:
+                pass
+
+        t_out = threading.Thread(target=_read_stream, args=(proc.stdout, stdout_lines), daemon=True)
+        t_err = threading.Thread(target=_read_stream, args=(proc.stderr, stderr_lines), daemon=True)
+        t_out.start()
+        t_err.start()
+
+        wait_limit = 4 if should_run_bg else timeout
+        start_time = time.time()
+
+        while time.time() - start_time < wait_limit:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.1)
+
+        is_running = proc.poll() is None
+
+        if is_running:
+            if should_run_bg:
+                output = "".join(stdout_lines) + "".join(stderr_lines)
+                output_str = output.strip() if output else "[Process started successfully]"
+                return (
+                    f"{output_str}\n\n"
+                    f"[Background process started and running with PID {proc.pid}]"
+                )
+            else:
+                output = "".join(stdout_lines) + "".join(stderr_lines)
+                output_str = output.strip() if output else "[No output received before timeout]"
+                _kill_process_tree(proc.pid)
+                return (
+                    f"{output_str}\n\n"
+                    f"[Error: Command timed out after {timeout} seconds and was terminated.]"
+                )
+
+        output = "".join(stdout_lines) + "".join(stderr_lines)
         return output.strip() if output else "[Command finished with no output]"
 
-    except subprocess.TimeoutExpired:
-        return f"Error: Command timed out after {timeout} seconds."
     except Exception as e:
         return f"Error executing command: {str(e)}"
-
 
 
 TOOLS = [
@@ -176,17 +256,25 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "bash",
-            "description": "Run shell/bash commands (ls, git, pytest, grep, find, etc.). Use this for system actions.",
+            "description": "Run shell/bash commands (ls, git, pytest, grep, find, npm, etc.). Non-blocking for background/dev server commands.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
                         "description": "Bash command string to execute."
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Maximum time in seconds to wait for command completion (default: 30)."
+                    },
+                    "is_background": {
+                        "type": "boolean",
+                        "description": "Set to true for long-running background tasks or dev servers (e.g., npm run dev)."
                     }
                 },
                 "required": ["command"]
             }
         }
     }
-]
+]

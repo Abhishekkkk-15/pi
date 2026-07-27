@@ -10,5 +10,6 @@ wheels/
 .venv
 .env
 web/
+server/
 .pi_history
 .memory/
