@@ -7,7 +7,7 @@ class Config:
     llm_api_key: str | None 
     tavily_api_key: str | None = None
     is_dev: bool = True
-    model: Models = Models.CHAT 
+    model: Models = Models.NVIDIA_NEMOTRON 
     max_history_messages: int = 50
     autonomous_risk: bool = False
 

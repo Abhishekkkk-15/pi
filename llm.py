@@ -1,4 +1,5 @@
 from mistralai.client import Mistral
+from openai import OpenAI
 import os
 import prompts
 from enum import Enum
@@ -13,8 +14,22 @@ load_dotenv()
 import json
 from skills import Skills
 from permissions import PermissionManager, PermissionDecision
+from typing import Literal
+
 api_key = os.getenv("LLM_KEY")
 
+PROVIDERS = Literal["nvidia", "mistral"]
+PROVIDERS_ENDPOINTS: dict[str, str] = {
+    "nvidia": "https://integrate.api.nvidia.com/v1",  
+    "mistral": "https://api.mistral.ai/v1",  
+}
+
+from langchain_nvidia_ai_endpoints import NVIDIA
+# Mistral(
+#     server_url=
+# )
+# llm = NVIDIA(api_key="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")
+# llm.
 
 def sanitize_api_messages(raw_messages: list[dict]) -> list[dict]:
     """
@@ -101,22 +116,30 @@ def apply_sliding_window(raw_messages: list[dict], max_history: int = 20) -> lis
 
 
 class Agent:
+    provider: str = "mistral"
     def __init__(self):
         config = Config()
         self.config = config
         self.console = get_console() 
-        self.client = Mistral(api_key=api_key)
+        self.provider = os.getenv("LLM_PROVIDER", "mistral").lower()
+        self.client = self.create_model()
         self.prompt = prompts.Prompt()
         self.memory: Memory = Memory() 
         self.memory.messages = [Message(role=Role.SYSTEM, content=self.prompt.prompts[0])]
         self.console = get_console()
+        print(self.provider, self.config.model)
+    @property
+    def model_name(self) -> str:
+        model_str = str(self.config.model.value) if hasattr(self.config.model, "value") else str(self.config.model)
+        if self.provider == "nvidia" and ("mistral-medium" in model_str or "mistral-embed" in model_str or "/" not in model_str):
+            return os.getenv("LLM_MODEL", "meta/llama-3.1-70b-instruct")
+        return os.getenv("LLM_MODEL", model_str)
 
     def select_relevant_skills(self, user_query: str) -> list[str]:
         
         available = Skills.names()
         if not available:
             return []
-        print(available)
         prompt_str = (
             f"You are a skill selection system for an AI coding assistant.\n"
             f"User Task: \"{user_query}\"\n\n"
@@ -126,8 +149,8 @@ class Agent:
         )
 
         try:
-            response = self.client.chat.complete(
-                model=self.config.model, # type: ignore
+            response = self.client.chat.completions.create(
+                model=self.model_name, # type: ignore
                 messages=[{"role": "user", "content": prompt_str}] # type: ignore
             )
             content = (response.choices[0].message.content or "").strip()
@@ -164,16 +187,28 @@ class Agent:
         while True:
             raw_dicts = [f.to_dict() for f in self.memory.messages]
             api_messages = apply_sliding_window(raw_dicts, max_history=self.config.max_history_messages)
-            res = self.client.chat.complete(  # type: ignore
-                model=self.config.model, # type: ignore
+
+            res = self.client.chat.completions.create(  # type: ignore
+                model=self.model_name, # type: ignore
                 messages=api_messages, # type: ignore
                 tools=TOOLS # type: ignore
             )
+            if not res.choices:
+                return None
             llm_res = res.choices[0]
+
+            tool_calls_raw = llm_res.message.tool_calls
+            if tool_calls_raw:
+    # Pydantic v2
+                tool_calls_dicts = [tc.model_dump() for tc in tool_calls_raw]
+    # Or for Pydantic v1: [tc.dict() for tc in tool_calls_raw]
+            else:
+                tool_calls_dicts = None
+
             chat_msg = Message(
                 role=Role.ASSISTANT,
-                content=llm_res.message.content or "",  # type: ignore
-                tool_calls=llm_res.message.tool_calls   # type: ignore
+                content=llm_res.message.content or "",
+                tool_calls=tool_calls_dicts   # now it's a list of dicts
             )
             self.memory.messages.append(chat_msg)
             if self.memory and self.memory.session:
@@ -181,8 +216,8 @@ class Agent:
             
             if llm_res.message.tool_calls:  # type: ignore
                 for tool in llm_res.message.tool_calls:  # type: ignore
-                    tool_name = tool.function.name
-                    tool_arguments = tool.function.arguments
+                    tool_name = tool.function.name  # type: ignore
+                    tool_arguments = tool.function.arguments  # type: ignore
                     self.console.print_tool_call(tool_name, tool_arguments)  # type: ignore
                     try:
                         fn_output = self.dispatch_tool_call(tool_name, tool_arguments)  # type: ignore
@@ -206,7 +241,14 @@ class Agent:
      
         return self.chat(user_query)
 
-    
+    def create_model(self):
+        endpoint = PROVIDERS_ENDPOINTS.get(self.provider, "https://api.mistral.ai/v1")
+        return OpenAI(
+            api_key=api_key,
+            base_url=endpoint
+        )
+        
+        res.choices["messages"][-1].content
     def check_and_request_permission(self, tool_name: str, target: str, action_details: str) -> bool:
         """Checks if permission is pre-approved, otherwise prompts the user with persistent options."""
         if PermissionManager.check_permission(self.memory.session, tool_name, target, self.config.autonomous_risk):

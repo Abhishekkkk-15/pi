@@ -11,4 +11,7 @@ dependencies = [
     "typing>=3.10.0.0",
     "prompt-toolkit>=3.0.0",
     "tavily-python>=0.5.0",
+    "langchain-nvidia-ai-endpoints>=1.4.3",
+    "langchain-openai>=1.4.1",
+    "openai>=2.49.0",
 ]
