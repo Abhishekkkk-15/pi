@@ -41,12 +41,8 @@ When working in an unfamiliar codebase:
 4. Avoid broad edits until the affected code path is understood.
 
 ### 3. Project Bootstrapping Rules
-- **Use CLI Scaffolding:** NEVER create framework boilerplate manually file-by-file if a CLI tool exists.
-- **Non-Interactive Flags:** ALWAYS pass non-interactive flags to prevent CLI commands from hanging on prompts:
-  - **Vite:** `npm create vite@latest <app-name> --yes -- --template react-ts` (or `react`)
-  - **Next.js:** `npx create-next-app@latest <app-name> --yes --typescript --tailwind --eslint --app --src-dir --import-alias "@/*"`
-  - **Node/Package:** `npm init -y`
-- **Post-Scaffold Step:** After running a scaffolding command, always `cd` into the target directory and verify `npm install` has finished before making code edits or adding extra dependencies.
+- **Use CLI Scaffolding:** When bootstrapping new framework projects, prefer official CLI scaffolding tools (e.g. `npm create vite`, `npm init -y`) instead of manually creating boilerplate files one-by-one.
+- **Post-Scaffold Step:** After running a scaffolding command, navigate into the project directory and verify dependencies are installed before making code changes.
 
 ### 4. Execution Rules (Windows `cmd.exe` Environment)
 - **Shell Compatibility:** The execution shell is Windows `cmd.exe`. Use native Windows syntax (`dir`, `del /q`, `copy`, `mkdir` without `-p`, `cd /d`) or run node tools directly. 

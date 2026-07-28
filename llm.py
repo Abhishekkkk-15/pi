@@ -4,14 +4,14 @@ import prompts
 from enum import Enum
 from dotenv import load_dotenv
 from models import Role,Message, Session
-from tools import TOOLS
+from tools import TOOLS, execute_read, execute_write, execute_edit, execute_bash, execute_web_search
 from console import get_console
 from config import Config
 from memory import Memory
 from dataclasses import asdict
 load_dotenv()
 import json
-from tools import *
+from skills import Skills
 api_key = os.getenv("LLM_KEY")
 
 
@@ -106,11 +106,55 @@ class Agent:
         self.console = get_console() 
         self.client = Mistral(api_key=api_key)
         self.prompt = prompts.Prompt()
-        self.memory:Memory = Memory() 
+        self.memory: Memory = Memory() 
         self.memory.messages = [Message(role=Role.SYSTEM, content=self.prompt.prompts[0])]
         self.console = get_console()
-      
+
+    def select_relevant_skills(self, user_query: str) -> list[str]:
+        
+        available = Skills.names()
+        if not available:
+            return []
+        print(available)
+        prompt_str = (
+            f"You are a skill selection system for an AI coding assistant.\n"
+            f"User Task: \"{user_query}\"\n\n"
+            f"Available Skills: {available}\n\n"
+            f"Select which skill names from the Available Skills list are relevant for fulfilling the user task.\n"
+            f"Return ONLY a JSON array of matching skill names, e.g. [\"react\", \"git\"]. If none are relevant, return []."
+        )
+
+        try:
+            response = self.client.chat.complete(
+                model=self.config.model, # type: ignore
+                messages=[{"role": "user", "content": prompt_str}] # type: ignore
+            )
+            content = (response.choices[0].message.content or "").strip()
+            import re
+            json_match = re.search(r'\[.*?\]', content, re.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group(0))
+                if isinstance(parsed, list):
+                    return [s for s in parsed if isinstance(s, str) and s in available]
+            return []
+        except Exception:
+            q_lower = user_query.lower()
+            return [s for s in available if s.lower() in q_lower]
+
     def chat(self, user_query: str):
+        # Evaluate and load relevant skills from .skills
+        available_skills = Skills.names()
+        if available_skills:
+            selected_names = self.select_relevant_skills(user_query)
+            if selected_names:
+                active_skills = Skills.load_many(selected_names)
+                sys_prompt = self.prompt.get_system_prompt(active_skills)
+                if self.memory.messages and self.memory.messages[0].role == Role.SYSTEM:
+                    self.memory.messages[0].content = sys_prompt
+                    if self.memory and self.memory.session:
+                        self.memory.write_to_jsonl(self.memory.session.history_path, self.memory.messages, mode="w")
+                self.console.console.print(f"[bold cyan]🎯 Active Skills Loaded:[/bold cyan] [yellow]{', '.join(selected_names)}[/yellow]")
+
         user_msg = Message(role=Role.USER, content=user_query)
         self.memory.messages.append(user_msg)
         if self.memory and self.memory.session:

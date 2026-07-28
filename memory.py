@@ -20,7 +20,7 @@ class Memory:
         self.messages = []
         self.session = None
     
-    def init_session(self, title: str) -> Session:
+    def init_session(self, title: str, initial_messages: list[Message] = None) -> Session:
         id = generate_chat_id()
         workspace = Path.cwd()
         history_path = workspace / ".memory" / id
@@ -35,6 +35,8 @@ class Memory:
         )
         self.session = session
         self.write_to_json(history_path / "metadata.json", session)    
+        if initial_messages:
+            self.write_to_jsonl(conversation_jsonl, initial_messages, mode="a")
         return session
     
     def load_old_sessions(self) -> list[Session]:
@@ -66,10 +68,14 @@ class Memory:
 
         return sessions
         
-    def load_session_chat(self, path: Path) -> list[Message]:
+    def load_session_chat(self, path: Path, system_prompt: str = "") -> list[Message]:
         if not path or not path.exists():
             return []
         old_chat = self.read_from_jsonl(path=path)
+        if not old_chat or old_chat[0].role != Role.SYSTEM:
+            if system_prompt:
+                sys_msg = Message(role=Role.SYSTEM, content=system_prompt)
+                old_chat.insert(0, sys_msg)
         self.messages = old_chat
         return old_chat
         # return Session()
@@ -136,3 +142,4 @@ class Memory:
                     messages.append(message)
 
         return messages[-15:]
+

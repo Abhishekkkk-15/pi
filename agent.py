@@ -33,7 +33,7 @@ def main():
                     continue
                 selected_session = agent.console.interactive_select(old_sessions)
                 agent.console.clear_screen()
-                old_chats = agent.memory.load_session_chat(selected_session.history_path)
+                old_chats = agent.memory.load_session_chat(selected_session.history_path, system_prompt=agent.prompt.raw_system_prompt)
                 agent.memory.session = selected_session
                 agent.console.print_welcome(selected_session.title, str(selected_session.workspace))
                 agent.console.print_chat_history(old_chats)
@@ -48,7 +48,7 @@ def main():
             # Show loading indicator
             with agent.console.print_loading("Processing your request..."):
                 if agent.memory.session is None:
-                    session = agent.memory.init_session(user_query) 
+                    session = agent.memory.init_session(user_query, initial_messages=agent.memory.messages) 
                     agent.current_session = session  # type: ignore
                     agent.console.clear_screen()
                     agent.console.print_welcome(session.title, str(session.workspace))
