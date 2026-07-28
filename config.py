@@ -5,6 +5,7 @@ from models import Models
 load_dotenv()
 class Config:
     llm_api_key: str | None 
+    tavily_api_key: str | None = None
     is_dev: bool = True
     model: Models = Models.CHAT 
     max_history_messages: int = 20
@@ -15,6 +16,7 @@ class Config:
             raise RuntimeError("LLM API key is Required!")
         is_dev = os.getenv("enviroment") 
         self.llm_api_key = api_key
+        self.tavily_api_key = os.getenv("TAVILY_API_KEY")
         self.is_dev = True if is_dev else False
         
         max_hist = os.getenv("MAX_HISTORY_MESSAGES")

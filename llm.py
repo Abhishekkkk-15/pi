@@ -188,6 +188,13 @@ class Agent:
                 return "User permission denied"
             return execute_bash(cmd, timeout=timeout, is_background=is_bg)
 
+        elif tool_name == "web_search":
+            query = args.get("query", "")
+            max_results = args.get("max_results", 5)
+            if not self.console.confirm_permission(f"Agent wants to run web_search: '{query}'"):
+                return "User permission denied"
+            return execute_web_search(query, max_results=max_results)
+
         else:
             return f"Unknown tool: {tool_name}"
 

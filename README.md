@@ -54,9 +54,10 @@ Create a `.env` file in the project root:
 
 ```env
 LLM_KEY=your_mistral_api_key_here
+TAVILY_API_KEY=your_tavily_api_key_here
 ```
 
-You can obtain a Mistral API key from [Mistral AI](https://mistral.ai/).
+You can obtain a Mistral API key from [Mistral AI](https://mistral.ai/) and a Tavily API key from [Tavily](https://tavily.com/).
 
 ### Project Structure
 
@@ -94,6 +95,7 @@ Task > Read the contents of agent.py
 Task > Create a new Python file called test.py with a hello world function
 Task > Edit test.py to add error handling
 Task > Run a bash command to list files
+Task > Search the web for latest Python 3.14 features
 Task > exit  # or quit to end session
 ```
 
@@ -107,6 +109,7 @@ The agent has access to the following tools:
 | `write` | Create/overwrite files | `write(path="test.py", content="print('hello')")` |
 | `edit` | Edit files precisely | `edit(path="test.py", edits=[{"oldText": "print('hello')", "newText": "print('world')"}])` |
 | `bash` | Execute shell commands | `bash(command="ls -la")` |
+| `web_search` | Real-time web search via Tavily | `web_search(query="Python 3.14 features")` |
 
 ### Console Features
 

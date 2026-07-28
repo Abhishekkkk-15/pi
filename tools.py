@@ -178,6 +178,46 @@ def execute_bash(command: str, timeout: int = 30, is_background: bool = False) -
         return f"Error executing command: {str(e)}"
 
 
+def execute_web_search(query: str, max_results: int = 5) -> str:
+    """Executes a real-time web search using the Tavily API."""
+    api_key = os.getenv("TAVILY_API_KEY")
+    if not api_key:
+        return "Error: TAVILY_API_KEY environment variable is not set. Please add TAVILY_API_KEY to your .env file."
+
+    try:
+        try:
+            from tavily import TavilyClient
+            client = TavilyClient(api_key=api_key)
+            response = client.search(query=query, max_results=max_results)
+            results = response.get("results", [])
+        except ImportError:
+            import urllib.request
+            import json
+            req = urllib.request.Request(
+                "https://api.tavily.com/search",
+                data=json.dumps({"api_key": api_key, "query": query, "max_results": max_results}).encode("utf-8"),
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                results = data.get("results", [])
+
+        if not results:
+            return f"No web search results found for query: '{query}'."
+
+        formatted_results = []
+        for i, res in enumerate(results, 1):
+            title = res.get("title", "No Title")
+            url = res.get("url", "")
+            content = res.get("content", "")
+            formatted_results.append(f"[{i}] {title}\nURL: {url}\nContent: {content}\n")
+
+        return "\n".join(formatted_results)
+
+    except Exception as e:
+        return f"Error executing web search: {str(e)}"
+
+
 TOOLS = [
     {
         "type": "function",
@@ -274,6 +314,27 @@ TOOLS = [
                     }
                 },
                 "required": ["command"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Perform real-time web searches using Tavily for up-to-date documentation, news, or answers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query string."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of search results to return (default: 5)."
+                    }
+                },
+                "required": ["query"]
             }
         }
     }
