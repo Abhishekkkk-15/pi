@@ -60,7 +60,12 @@ class Memory:
                                 id=data.get("id", folder.name),
                                 title=data.get("title", folder.name),
                                 workspace=Path(data["workspace"]) if "workspace" in data else Path.cwd(),
-                                history_path=Path(data["history_path"]) if "history_path" in data else folder / "conversation_history.jsonl"
+                                history_path=Path(data["history_path"]) if "history_path" in data else folder / "conversation_history.jsonl",
+                                permissions=data.get("permissions", {
+                                    "allow_all": False,
+                                    "allowed_tools": [],
+                                    "allowed_targets": {}
+                                })
                             )
                             sessions.append(session)
                     except (json.JSONDecodeError, KeyError, OSError):

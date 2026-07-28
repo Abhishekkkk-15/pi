@@ -1,3 +1,4 @@
+import argparse
 import llm
 from models import Models
 from rich.traceback import install
@@ -8,11 +9,18 @@ import sys
 install(show_locals=True)
 
 def main():
+    parser = argparse.ArgumentParser(description="PI - Python Agent Harness")
+    parser.add_argument("--autonomous-risk", "-a", action="store_true", help="Allow agent to execute all tools automatically without asking for permission")
+    args = parser.parse_args()
 
     agent = llm.Agent()
-    
+    if args.autonomous_risk:
+        agent.config.autonomous_risk = True
+
     # Print welcome message
     agent.console.print_welcome()
+    if agent.config.autonomous_risk:
+        agent.console.print_error("⚠️ AUTONOMOUS RISK MODE ACTIVE: All tool actions will execute without confirmation prompts.", "Autonomous Mode")
     
     while True:
         try:

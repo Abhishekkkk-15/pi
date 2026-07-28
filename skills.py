@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 
 class Skills:
-    SKILLS_DIRS = [Path.cwd() / "skills", Path.cwd() / ".skills"]
+    SKILLS_DIRS = [Path.cwd() / "skills", Path.cwd()]
     FILENAME = "SKILL.md"
 
     _cache: Dict[str, str] = {}

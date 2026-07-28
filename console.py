@@ -244,6 +244,48 @@ class ConsoleUI:
 
         return res
 
+    def confirm_permission_extended(self, tool_name: str, target: str, action_details: str) -> str:
+        """
+        Displays an extended permission prompt asking the user for confirmation.
+        Returns one of: 'y' (once), 'a' (always tool), 'f' (always target), 'all' (always all), 'n' (deny).
+        """
+        was_loading = self._current_live is not None
+        if was_loading:
+            self.stop_loading()
+
+        clean_target = target[:60] + "..." if len(target) > 60 else target
+        prompt_text = (
+            f"[bold yellow]{action_details}[/bold yellow]\n\n"
+            f"[cyan]Select Permission Option:[/cyan]\n"
+            f"  [bold green][y][/bold green]   Allow Once (this call only)\n"
+            f"  [bold green][a][/bold green]   Always Allow Tool [yellow]'{tool_name}'[/yellow] (for this workspace)\n"
+            f"  [bold green][f][/bold green]   Always Allow Target [yellow]'{clean_target}'[/yellow] (for this workspace)\n"
+            f"  [bold green][all][/bold green] Always Allow ALL Tools (full auto mode for this workspace)\n"
+            f"  [bold red][n][/bold red]   Deny Action"
+        )
+
+        self.console.print(
+            Panel(
+                Text.from_markup(prompt_text),
+                title=f"[bold red]⚠️  Permission Required ({tool_name})[/bold red]",
+                border_style="red",
+                box=box.ROUNDED,
+            )
+        )
+
+        valid_choices = ["y", "a", "f", "all", "n"]
+        choice = Prompt.ask(
+            "Permission choice",
+            choices=valid_choices,
+            default="n",
+            console=self.console
+        ).lower().strip()
+
+        if was_loading:
+            self.start_loading("Processing your request...")
+
+        return choice
+
     def print_separator(self):
         """Print a separator line"""
         self.console.print("─" * self.console.width, style="dim")

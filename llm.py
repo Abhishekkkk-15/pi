@@ -12,6 +12,7 @@ from dataclasses import asdict
 load_dotenv()
 import json
 from skills import Skills
+from permissions import PermissionManager, PermissionDecision
 api_key = os.getenv("LLM_KEY")
 
 
@@ -206,36 +207,51 @@ class Agent:
         return self.chat(user_query)
 
     
-    def dispatch_tool_call(self,tool_name:str, function_arguments:str):
+    def check_and_request_permission(self, tool_name: str, target: str, action_details: str) -> bool:
+        """Checks if permission is pre-approved, otherwise prompts the user with persistent options."""
+        if PermissionManager.check_permission(self.memory.session, tool_name, target, self.config.autonomous_risk):
+            return True
+
+        choice = self.console.confirm_permission_extended(tool_name, target, action_details)
+        if choice in (PermissionDecision.ALLOW_ONCE, PermissionDecision.ALWAYS_TOOL, PermissionDecision.ALWAYS_TARGET, PermissionDecision.ALWAYS_ALL):
+            if choice != PermissionDecision.ALLOW_ONCE and self.memory and self.memory.session:
+                PermissionManager.save_permission_grant(self.memory, self.memory.session, choice, tool_name, target)
+            return True
+        return False
+
+    def dispatch_tool_call(self, tool_name: str, function_arguments: str):
         args = json.loads(function_arguments)
         if tool_name == "read":
-            if not self.console.confirm_permission(f"Agent want to read {args["path"]}"):
-                return "User permission deined"
-            return execute_read(args["path"])
+            path = args.get("path", "")
+            if not self.check_and_request_permission(tool_name, path, f"Agent wants to read {path}"):
+                return "User permission denied"
+            return execute_read(path)
 
         elif tool_name == "write":
-            if not self.console.confirm_permission(f"Agent want to {tool_name} {args["path"]}"):
-                return "User permission deined"
-            return execute_write(args["path"], args["content"])
+            path = args.get("path", "")
+            if not self.check_and_request_permission(tool_name, path, f"Agent wants to write to {path}"):
+                return "User permission denied"
+            return execute_write(path, args.get("content", ""))
 
         elif tool_name == "edit":
-            if not self.console.confirm_permission(f"Agent want to {tool_name} {args["path"]}"):
-                return "User permission deined"
-            return execute_edit(args["path"], args["edits"])
+            path = args.get("path", "")
+            if not self.check_and_request_permission(tool_name, path, f"Agent wants to edit {path}"):
+                return "User permission denied"
+            return execute_edit(path, args.get("edits", []))
 
         elif tool_name == "bash":
             cmd = args.get("command", "")
             timeout = args.get("timeout", 30)
             is_bg = args.get("is_background", False)
             bg_note = " (background)" if is_bg else ""
-            if not self.console.confirm_permission(f"Agent wants to run {tool_name}{bg_note}: {cmd}"):
+            if not self.check_and_request_permission(tool_name, cmd, f"Agent wants to run bash{bg_note}: {cmd}"):
                 return "User permission denied"
             return execute_bash(cmd, timeout=timeout, is_background=is_bg)
 
         elif tool_name == "web_search":
             query = args.get("query", "")
             max_results = args.get("max_results", 5)
-            if not self.console.confirm_permission(f"Agent wants to run web_search: '{query}'"):
+            if not self.check_and_request_permission(tool_name, query, f"Agent wants to run web_search: '{query}'"):
                 return "User permission denied"
             return execute_web_search(query, max_results=max_results)
 

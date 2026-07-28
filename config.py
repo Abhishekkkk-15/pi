@@ -8,7 +8,8 @@ class Config:
     tavily_api_key: str | None = None
     is_dev: bool = True
     model: Models = Models.CHAT 
-    max_history_messages: int = 20
+    max_history_messages: int = 50
+    autonomous_risk: bool = False
 
     def __init__(self):
         api_key = os.getenv("LLM_KEY")
@@ -22,5 +23,9 @@ class Config:
         max_hist = os.getenv("MAX_HISTORY_MESSAGES")
         if max_hist and max_hist.isdigit():
             self.max_history_messages = int(max_hist)
+            
+        auto_risk = os.getenv("AUTONOMOUS_RISK")
+        if auto_risk and auto_risk.lower() in ("true", "1", "yes"):
+            self.autonomous_risk = True
         
         

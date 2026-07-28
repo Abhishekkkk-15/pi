@@ -72,12 +72,19 @@ class Message:
         
         
 
+from dataclasses import dataclass, field
+
 @dataclass
 class Session:
-    id:str
-    title:str
+    id: str
+    title: str
     workspace: Path
-    history_path:Path
+    history_path: Path
+    permissions: dict = field(default_factory=lambda: {
+        "allow_all": False,
+        "allowed_tools": [],
+        "allowed_targets": {}
+    })
 
 class Models(Enum):
     EMBEED = "mistral-embed"
