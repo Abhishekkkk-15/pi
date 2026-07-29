@@ -1,8 +1,9 @@
 import argparse
 import llm
-from models import Models
+from models import Models, Message, Role
 from rich.traceback import install
 from console import get_console
+from interrupt import AgentInterrupted
 
 import sys
 
@@ -54,7 +55,7 @@ def main():
             agent.console.print_separator()
             
             # Show loading indicator
-            with agent.console.print_loading("Processing your request..."):
+            with agent.console.print_loading("Processing your request... (ESC to stop)"):
                 if agent.memory.session is None:
                     session = agent.memory.init_session(user_query, initial_messages=agent.memory.messages) 
                     agent.current_session = session  # type: ignore
@@ -64,16 +65,35 @@ def main():
                     
                 response = agent.send(user_query)
             
+            # Interrupted or LLM error already handled/persisted inside Agent.chat
+            if response is None:
+                agent.console.print_separator()
+                continue
+
             # Print assistant response
             agent.console.print_separator()
             agent.console.print_assistant_message(response.message.content)  # type: ignore
             agent.console.print_separator()
             
         except KeyboardInterrupt:
-            agent.console.print_error("\nOperation cancelled by user")
+            # At the prompt: exit. During a turn, Agent.chat already handled interrupt.
+            agent.console.print_system_message("Goodbye!", "Exit")
             break
+        except AgentInterrupted:
+            agent.console.print_separator()
+            continue
         except Exception as e:
             agent.console.print_error(f"An error occurred: {str(e)}")
+            # Persist unexpected runtime errors into the active session history
+            if agent.memory and agent.memory.session:
+                err_msg = Message(
+                    role=Role.ASSISTANT,
+                    content=f"[Error] {type(e).__name__}: {e}",
+                )
+                agent.memory.messages.append(err_msg)
+                agent.memory.write_to_jsonl(
+                    agent.memory.session.history_path, [err_msg], mode="a"
+                )
             agent.console.print_separator()
 
 

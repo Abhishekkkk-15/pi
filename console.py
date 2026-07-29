@@ -216,6 +216,8 @@ class ConsoleUI:
         welcome_text.append("\n")
         welcome_text.append("  Type 'exit' or 'quit' to end session  ", style="dim")
         welcome_text.append("\n")
+        welcome_text.append("  Press ESC to stop the current agent turn  ", style="dim")
+        welcome_text.append("\n")
         
         self.console.print(Panel(welcome_text, box=box.DOUBLE))
         

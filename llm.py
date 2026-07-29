@@ -12,9 +12,11 @@ from memory import Memory
 from dataclasses import asdict
 load_dotenv()
 import json
+import threading
 from skills import Skills
 from permissions import PermissionManager, PermissionDecision
-from typing import Literal
+from typing import Any, Literal, Optional
+from interrupt import AgentInterrupted, interrupt_controller
 
 api_key = os.getenv("LLM_KEY")
 
@@ -149,9 +151,10 @@ class Agent:
         )
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name, # type: ignore
-                messages=[{"role": "user", "content": prompt_str}] # type: ignore
+            interrupt_controller.check()
+            response = self._create_completion(
+                messages=[{"role": "user", "content": prompt_str}],
+                use_tools=False,
             )
             content = (response.choices[0].message.content or "").strip()
             import re
@@ -161,84 +164,212 @@ class Agent:
                 if isinstance(parsed, list):
                     return [s for s in parsed if isinstance(s, str) and s in available]
             return []
+        except AgentInterrupted:
+            raise
         except Exception:
             q_lower = user_query.lower()
             return [s for s in available if s.lower() in q_lower]
 
-    def chat(self, user_query: str):
-        # Evaluate and load relevant skills from .skills
-        available_skills = Skills.names()
-        if available_skills:
-            selected_names = self.select_relevant_skills(user_query)
-            if selected_names:
-                active_skills = Skills.load_many(selected_names)
-                sys_prompt = self.prompt.get_system_prompt(active_skills)
-                if self.memory.messages and self.memory.messages[0].role == Role.SYSTEM:
-                    self.memory.messages[0].content = sys_prompt
-                    if self.memory and self.memory.session:
-                        self.memory.write_to_jsonl(self.memory.session.history_path, self.memory.messages, mode="w")
-                self.console.console.print(f"[bold cyan]🎯 Active Skills Loaded:[/bold cyan] [yellow]{', '.join(selected_names)}[/yellow]")
-
-        user_msg = Message(role=Role.USER, content=user_query)
-        self.memory.messages.append(user_msg)
+    def _append_message(self, msg: Message) -> None:
+        """Append a message to in-memory history and persist to the session JSONL."""
+        self.memory.messages.append(msg)
         if self.memory and self.memory.session:
-            self.memory.write_to_jsonl(self.memory.session.history_path, [user_msg], mode="a")
-        
-        while True:
-            raw_dicts = [f.to_dict() for f in self.memory.messages]
-            api_messages = apply_sliding_window(raw_dicts, max_history=self.config.max_history_messages)
+            self.memory.write_to_jsonl(self.memory.session.history_path, [msg], mode="a")
 
-            res = self.client.chat.completions.create(  # type: ignore
-                model=self.model_name, # type: ignore
-                messages=api_messages, # type: ignore
-                tools=TOOLS # type: ignore
-            )
-            if not res.choices:
-                return None
-            llm_res = res.choices[0]
+    def _record_error(self, error: BaseException, title: str = "LLM Error") -> Message:
+        """Show an error in the console and persist it to conversation history."""
+        detail = f"{type(error).__name__}: {error}"
+        self.console.print_error(detail, title=title)
+        err_msg = Message(
+            role=Role.ASSISTANT,
+            content=f"[{title}] {detail}",
+        )
+        self._append_message(err_msg)
+        return err_msg
 
-            tool_calls_raw = llm_res.message.tool_calls
-            if tool_calls_raw:
-    # Pydantic v2
-                tool_calls_dicts = [tc.model_dump() for tc in tool_calls_raw]
-    # Or for Pydantic v1: [tc.dict() for tc in tool_calls_raw]
-            else:
-                tool_calls_dicts = None
+    def _finalize_pending_tool_calls(self) -> None:
+        """
+        If the last assistant turn requested tools but some responses are missing
+        (e.g. interrupted mid-loop), write placeholder tool messages so history
+        stays valid for the next API call.
+        """
+        messages = self.memory.messages
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
+            if msg.role == Role.ASSISTANT and getattr(msg, "tool_calls", None):
+                expected_ids: list[str] = []
+                for tc in msg.tool_calls or []:
+                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                    if tc_id:
+                        expected_ids.append(tc_id)
 
-            chat_msg = Message(
-                role=Role.ASSISTANT,
-                content=llm_res.message.content or "",
-                tool_calls=tool_calls_dicts   # now it's a list of dicts
-            )
-            self.memory.messages.append(chat_msg)
-            if self.memory and self.memory.session:
-                self.memory.write_to_jsonl(self.memory.session.history_path, [chat_msg], mode="a")
-            
-            if llm_res.message.tool_calls:  # type: ignore
-                for tool in llm_res.message.tool_calls:  # type: ignore
-                    tool_name = tool.function.name  # type: ignore
-                    tool_arguments = tool.function.arguments  # type: ignore
-                    self.console.print_tool_call(tool_name, tool_arguments)  # type: ignore
-                    try:
-                        fn_output = self.dispatch_tool_call(tool_name, tool_arguments)  # type: ignore
-                    except Exception as e:
-                        fn_output = f"Error executing tool {tool_name}: {str(e)}"
-                    self.console.print_tool_result(fn_output)
-                    tool_msg = Message(
-                        role=Role.TOOL,
-                        name=tool_name,
-                        content=fn_output,
-                        tool_call_id=tool.id
+                answered: set[str] = set()
+                for later in messages[i + 1 :]:
+                    if later.role != Role.TOOL:
+                        break
+                    tid = getattr(later, "tool_call_id", None)
+                    if tid:
+                        answered.add(tid)
+
+                for t_id in expected_ids:
+                    if t_id not in answered:
+                        self._append_message(
+                            Message(
+                                role=Role.TOOL,
+                                content="Tool execution was interrupted by the user.",
+                                tool_call_id=t_id,
+                            )
+                        )
+                return
+            if msg.role == Role.USER:
+                return
+
+    def _handle_interrupt(self) -> None:
+        """Persist interrupt marker and notify the user."""
+        self._finalize_pending_tool_calls()
+        interrupt_msg = Message(
+            role=Role.USER,
+            content="[Interrupted] Execution stopped by user.",
+        )
+        self._append_message(interrupt_msg)
+        self.console.stop_loading()
+        self.console.print_system_message(
+            "Stopped current execution. Press Enter for a new task.",
+            title="Interrupted",
+        )
+
+    def _create_completion(
+        self,
+        messages: list[dict],
+        use_tools: bool = True,
+    ) -> Any:
+        """
+        Run chat.completions.create in a worker thread so ESC can interrupt
+        while waiting on the network response.
+        """
+        result: dict[str, Any] = {"response": None, "error": None}
+
+        def _run() -> None:
+            try:
+                kwargs: dict[str, Any] = {
+                    "model": self.model_name,
+                    "messages": messages,
+                }
+                if use_tools:
+                    kwargs["tools"] = TOOLS
+                result["response"] = self.client.chat.completions.create(**kwargs)
+            except Exception as exc:
+                result["error"] = exc
+
+        worker = threading.Thread(target=_run, name="llm-completion", daemon=True)
+        worker.start()
+        while worker.is_alive():
+            if interrupt_controller.interrupted:
+                raise AgentInterrupted("Execution stopped by user")
+            worker.join(timeout=0.1)
+
+        if result["error"] is not None:
+            raise result["error"]
+        return result["response"]
+
+    def chat(self, user_query: str) -> Optional[Any]:
+        interrupt_controller.start()
+        try:
+            # Evaluate and load relevant skills from .skills
+            available_skills = Skills.names()
+            if available_skills:
+                interrupt_controller.check()
+                selected_names = self.select_relevant_skills(user_query)
+                if selected_names:
+                    active_skills = Skills.load_many(selected_names)
+                    sys_prompt = self.prompt.get_system_prompt(active_skills)
+                    if self.memory.messages and self.memory.messages[0].role == Role.SYSTEM:
+                        self.memory.messages[0].content = sys_prompt
+                        if self.memory and self.memory.session:
+                            self.memory.write_to_jsonl(
+                                self.memory.session.history_path,
+                                self.memory.messages,
+                                mode="w",
+                            )
+                    self.console.console.print(
+                        f"[bold cyan]🎯 Active Skills Loaded:[/bold cyan] "
+                        f"[yellow]{', '.join(selected_names)}[/yellow]"
                     )
-                    self.memory.messages.append(tool_msg)
-                    if self.memory and self.memory.session:
-                        self.memory.write_to_jsonl(self.memory.session.history_path, [tool_msg], mode="a")
-            else:
-                return res.choices[0]        
-            # api_messages.append()
-            
+
+            user_msg = Message(role=Role.USER, content=user_query)
+            self._append_message(user_msg)
+
+            while True:
+                interrupt_controller.check()
+                raw_dicts = [f.to_dict() for f in self.memory.messages]
+                api_messages = apply_sliding_window(
+                    raw_dicts, max_history=self.config.max_history_messages
+                )
+
+                try:
+                    res = self._create_completion(api_messages, use_tools=True)
+                except AgentInterrupted:
+                    raise
+                except Exception as e:
+                    self._record_error(e, title="LLM Error")
+                    return None
+
+                if not res or not res.choices:
+                    self._record_error(
+                        RuntimeError("LLM returned no choices"),
+                        title="LLM Error",
+                    )
+                    return None
+
+                llm_res = res.choices[0]
+
+                tool_calls_raw = llm_res.message.tool_calls
+                if tool_calls_raw:
+                    tool_calls_dicts = [tc.model_dump() for tc in tool_calls_raw]
+                else:
+                    tool_calls_dicts = None
+
+                chat_msg = Message(
+                    role=Role.ASSISTANT,
+                    content=llm_res.message.content or "",
+                    tool_calls=tool_calls_dicts,
+                )
+                self._append_message(chat_msg)
+
+                if llm_res.message.tool_calls:  # type: ignore
+                    for tool in llm_res.message.tool_calls:  # type: ignore
+                        interrupt_controller.check()
+                        tool_name = tool.function.name  # type: ignore
+                        tool_arguments = tool.function.arguments  # type: ignore
+                        self.console.print_tool_call(tool_name, tool_arguments)  # type: ignore
+                        try:
+                            fn_output = self.dispatch_tool_call(tool_name, tool_arguments)  # type: ignore
+                        except AgentInterrupted:
+                            raise
+                        except Exception as e:
+                            fn_output = f"Error executing tool {tool_name}: {str(e)}"
+                            self.console.print_error(fn_output, title="Tool Error")
+                        self.console.print_tool_result(fn_output)
+                        tool_msg = Message(
+                            role=Role.TOOL,
+                            name=tool_name,
+                            content=fn_output,
+                            tool_call_id=tool.id,
+                        )
+                        self._append_message(tool_msg)
+                else:
+                    return res.choices[0]
+        except AgentInterrupted:
+            self._handle_interrupt()
+            return None
+        except KeyboardInterrupt:
+            interrupt_controller.trigger()
+            self._handle_interrupt()
+            return None
+        finally:
+            interrupt_controller.stop()
+
     def send(self, user_query):
-     
         return self.chat(user_query)
 
     def create_model(self):
@@ -254,7 +385,14 @@ class Agent:
         if PermissionManager.check_permission(self.memory.session, tool_name, target, self.config.autonomous_risk):
             return True
 
-        choice = self.console.confirm_permission_extended(tool_name, target, action_details)
+        # Pause ESC capture so the permission prompt receives keystrokes
+        interrupt_controller.pause()
+        try:
+            interrupt_controller.check()
+            choice = self.console.confirm_permission_extended(tool_name, target, action_details)
+        finally:
+            interrupt_controller.resume()
+
         if choice in (PermissionDecision.ALLOW_ONCE, PermissionDecision.ALWAYS_TOOL, PermissionDecision.ALWAYS_TARGET, PermissionDecision.ALWAYS_ALL):
             if choice != PermissionDecision.ALLOW_ONCE and self.memory and self.memory.session:
                 PermissionManager.save_permission_grant(self.memory, self.memory.session, choice, tool_name, target)
