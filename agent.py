@@ -50,7 +50,7 @@ def main():
                 
                 continue
                 
-            # Print user message
+            # Print user message once (prompt echo is erased in get_user_input)
             agent.console.print_user_message(user_query)
             agent.console.print_separator()
             
@@ -62,6 +62,9 @@ def main():
                     agent.console.clear_screen()
                     agent.console.print_welcome(session.title, str(session.workspace))
                     agent.console.print_system_message("New Conversation started")
+                    # clear_screen wiped the User block — print it again
+                    agent.console.print_user_message(user_query)
+                    agent.console.print_separator()
                     
                 response = agent.send(user_query)
             
