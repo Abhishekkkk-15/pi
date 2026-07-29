@@ -88,7 +88,7 @@ class Session:
 
 class Models(Enum):
     EMBEED = "mistral-embed"
-    CHAT = "mistral-medium-latest"
+    CHAT = "mistral-large-latest"
     NVIDIA_LLAMA = "meta/llama-3.1-70b-instruct"
     NVIDIA_MISTRAL = "mistralai/mistral-7b-instruct-v0.3"
     NVIDIA_NEMOTRON = "nvidia/nemotron-3-ultra-550b-a55b"
