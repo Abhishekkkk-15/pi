@@ -85,6 +85,10 @@ class Session:
         "allowed_tools": [],
         "allowed_targets": {}
     })
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
 
 class Models(Enum):
     EMBEED = "mistral-embed"
