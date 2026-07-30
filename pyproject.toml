@@ -8,10 +8,25 @@ dependencies = [
     "mistralai>=2.7.0",
     "python-dotenv>=1.2.2",
     "rich>=15.0.0",
-    "typing>=3.10.0.0",
     "prompt-toolkit>=3.0.0",
     "tavily-python>=0.5.0",
     "langchain-nvidia-ai-endpoints>=1.4.3",
     "langchain-openai>=1.4.1",
     "openai>=2.49.0",
 ]
+
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["agent", "llm", "console", "interrupt", "permissions", "skills", "tools", "config", "memory", "models"]
+packages = ["prompts"]
+
+[tool.setuptools.package-data]
+"*" = ["prompts/*.md", "skills/**/*.md", "skills/*.md"]
+
+[project.scripts]
+pi-python = "agent:main"
+
+
