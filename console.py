@@ -212,6 +212,7 @@ class ConsoleUI:
             ("/verbose", "Show full tool output"),
             ("/copy", "Copy last assistant reply to clipboard"),
             ("/resume", "Resume a previous session"),
+            ("/login", "Authenticate provider api key"),
             ("exit / quit", "End the session"),
         ]
         for cmd, desc in rows:
@@ -626,7 +627,12 @@ class ConsoleUI:
                 )
             )
 
-    def print_welcome(self, title: str = " ", ws_path: str = ""):
+    def print_welcome(
+        self,
+        title: str = " ",
+        ws_path: str = "",
+        is_auth: str | None = None,
+    ):
         if title and title.strip():
             self._session_title = title
         if ws_path:
@@ -635,12 +641,14 @@ class ConsoleUI:
         welcome_text = Text()
         welcome_text.append("\n")
         welcome_text.append("  PI - Python Agent Harness  ", style=THEME["brand"])
+
         if self._session_title.strip() and self._session_workspace:
             welcome_text.append("\n")
             welcome_text.append(
                 f"Title: {self._session_title} \n Workspace : {self._session_workspace} ",
                 style="bold cyan",
             )
+
         welcome_text.append("\n")
         welcome_text.append("  Type 'exit' or 'quit' to end - /help for commands  ", style=THEME["muted"])
         welcome_text.append("\n")
@@ -650,6 +658,26 @@ class ConsoleUI:
         welcome_text.append("\n")
 
         self.console.print(Panel(welcome_text, box=box.DOUBLE))
+
+        if not is_auth:
+            auth_warning = Text()
+            auth_warning.append("⚠️  No API Key / Credentials Found\n", style=THEME["warn"])
+            auth_warning.append(
+                "You are currently unauthenticated. Run ", style="white"
+            )
+            auth_warning.append("/login", style="bold cyan")
+            auth_warning.append(
+                " to configure your provider API key before sending tasks.", style="white"
+            )
+
+            self.console.print(
+                Panel(
+                    auth_warning,
+                    title=f"[{THEME['error_title']}]Authentication Required[/{THEME['error_title']}]",
+                    border_style=THEME["error_border"],
+                    box=box.ROUNDED,
+                )
+            )
 
     # ------------------------------------------------------------------
     # Permissions
@@ -780,7 +808,7 @@ class ConsoleUI:
 
     def clear_screen(self):
         self.console.clear()
-        self.print_welcome(self._session_title, self._session_workspace)
+        # self.print_welcome(self._session_title, self._session_workspace)
 
     def print_code_block(self, code: str, language: str = "python"):
         try:
@@ -852,7 +880,54 @@ class ConsoleUI:
                 )
 
         self.print_separator()
+        
+    def get_api_key(
+        self,
+        provider: str = "Provider",
+        env_var_hint: Optional[str] = None,
+    ) -> str:
+        """
+        Securely prompt the user to enter an API key with masked input.
+        Returns the entered API key string.
+        """
+        self.stop_loading()
+        title_text = f"Authentication - {provider}"
+        hint = f" (or set {env_var_hint} in environment)" if env_var_hint else ""
 
+        self.console.print(
+            Panel(
+                Text(f"Please enter your API key for {provider}{hint}:", style="bold cyan"),
+                title=title_text,
+                border_style=THEME["accent"],
+                box=box.ROUNDED,
+            )
+        )
+
+        while True:
+            try:
+                # Mask user input securely
+                api_key = PtPrompt(
+                    f"{provider} API Key > ",
+                    is_password=True,
+                ).strip()
+            except KeyboardInterrupt:
+                raise
+            except Exception:
+                # Fallback to rich Prompt password masking if PtPrompt fails
+                from rich.prompt import Prompt
+                api_key = Prompt.ask(
+                    f"{provider} API Key",
+                    password=True,
+                    console=self.console,
+                ).strip()
+
+            if api_key:
+                self.print_system_message(
+                    f"API key for {provider} set successfully.", title="Auth Success"
+                )
+                return api_key
+
+            self.print_error("API key cannot be empty. Please try again.", title="Auth Error")
 
 # Global console instance
 console_ui = ConsoleUI()

@@ -20,7 +20,7 @@ def main():
         agent.config.autonomous_risk = True
 
     # Print welcome message
-    agent.console.print_welcome()
+    agent.console.print_welcome(is_auth=agent.config.api_key)
     if agent.config.autonomous_risk:
         agent.console.print_error("⚠️ AUTONOMOUS RISK MODE ACTIVE: All tool actions will execute without confirmation prompts.", "Autonomous Mode")
     
@@ -37,26 +37,15 @@ def main():
                 continue
             continue_true = commands.router(user_query)  
             if continue_true:
+                if user_query == "/login":
+                    agent.client = agent.create_model()
                 continue
-            # if user_query == "/resume":
-            #     old_sessions = agent.memory.load_old_sessions()
-            #     if not old_sessions:
-            #         agent.console.print_system_message("No previous sessions found.", "Resume")
-            #         continue
-            #     selected_session = agent.console.interactive_select(old_sessions)
-            #     agent.console.clear_screen()
-            #     old_chats = agent.memory.load_session_chat(selected_session.history_path, system_prompt=agent.prompt.raw_system_prompt)
-            #     agent.memory.session = selected_session
-            #     agent.console.print_welcome(selected_session.title, str(selected_session.workspace))
-            #     agent.console.print_chat_history(old_chats)
-            #     agent.console.print_system_message(f"Resumed session: {selected_session.title}")
                 
-            #     continue
-                
-            # Print user message once (prompt echo is erased in get_user_input)
             agent.console.print_user_message(user_query)
             agent.console.print_separator()
-            
+            if not agent.config.api_key:
+                agent.console.print_error("You are currently unauthenticated. Run /login to configure your provider API key before sending tasks.")
+                continue
             # Show loading indicator
             with agent.console.print_loading("Processing your request... (ESC to stop)"):
                 if agent.memory.session is None:
@@ -64,7 +53,7 @@ def main():
                     agent.current_session = session  # type: ignore
                     agent._flush_pending_usage()
                     agent.console.clear_screen()
-                    agent.console.print_welcome(session.title, str(session.workspace))
+                    agent.console.print_welcome(session.title, str(session.workspace), is_auth=agent.config.api_key)
                     agent.console.print_system_message("New Conversation started")
                     # clear_screen wiped the User block — print it again
                     agent.console.print_user_message(user_query)

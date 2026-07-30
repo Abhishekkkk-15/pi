@@ -6,7 +6,9 @@ from pathlib import Path
 from dataclasses import asdict,is_dataclass
 from typing import Any, Union
 from enum import Enum
-
+import os
+from dotenv import load_dotenv
+load_dotenv()
 def generate_chat_id():
     return  uuid.uuid4().hex
 
@@ -15,14 +17,15 @@ def generate_chat_id():
 class Memory:
     messages: list[Message]
     session: Union[Session, None]
-
+    root = Path.cwd() / ".pi-python" if os.getenv("ENV","production") == "development" else Path.home() / ".pi-python"
     def __init__(self):
         self.messages = []
         self.session = None
     
-    def init_session(self, title: str, initial_messages: list[Message] = None) -> Session:
+    def init_session(self, title: str, initial_messages: list[Message] | None = None) -> Session:
         id = generate_chat_id()
-        workspace = Path.cwd()
+        Is_DEV = True if os.getenv("ENV","production") == "development" else False
+        workspace = Path.cwd() if Is_DEV else Path.home()
         history_path = workspace / ".pi-python" / id
         history_path.mkdir(parents=True, exist_ok=True)
         conversation_jsonl = history_path / "conversation_history.jsonl"
@@ -88,19 +91,38 @@ class Memory:
         self.messages = old_chat
         return old_chat
         # return Session()
-    
-    def write_to_json(self, path: Union[str, Path], data: Any) -> None:
-     """Writes data to a JSON file. Automatically converts dataclasses."""
-     payload = asdict(data) if is_dataclass(data) else data #type: ignore
+    @staticmethod
+    def write_to_json( path: Union[str, Path], data: Any) -> None:
 
-     with open(path, "w", encoding="utf-8") as file:
-         json.dump(payload, file, indent=4, default=str)
+        file_path = Path(path)
+        payload = asdict(data) if is_dataclass(data) else data  # type: ignore
 
+        try:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def read_from_json(self, path: Union[str, Path]) -> Any:
+            with open(file_path, "w", encoding="utf-8") as file:
+                json.dump(payload, file, indent=4, default=str)
+
+        except TypeError as e:
+            raise TypeError(
+            f"Failed to serialize data for {file_path.name}: {e}"
+            ) from e
+        except OSError as e:
+            raise RuntimeError(f"Could not write to {file_path}: {e}") 
+
+    @staticmethod
+    def read_from_json(path: Union[str, Path]) -> Any:
         """Reads and parses data from a JSON file."""
-        with open(path, "r", encoding="utf-8") as file:
-            return json.load(file)
+        file_path = Path(path)
+        try:
+            with open(file_path, "r", encoding="utf-8") as file:
+                return json.load(file)
+        except FileNotFoundError:
+            return None
+        except json.JSONDecodeError as e:
+            return None
+        except OSError as e:
+            return None
 
 
     def write_to_jsonl(

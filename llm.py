@@ -18,8 +18,6 @@ from permissions import PermissionManager, PermissionDecision
 from typing import Any, Literal, Optional
 from interrupt import AgentInterrupted, interrupt_controller
 
-api_key = os.getenv("LLM_KEY")
-
 PROVIDERS = Literal["nvidia", "mistral"]
 PROVIDERS_ENDPOINTS: dict[str, str] = {
     "nvidia": "https://integrate.api.nvidia.com/v1",  
@@ -27,11 +25,7 @@ PROVIDERS_ENDPOINTS: dict[str, str] = {
 }
 
 from langchain_nvidia_ai_endpoints import NVIDIA
-# Mistral(
-#     server_url=
-# )
-# llm = NVIDIA(api_key="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")
-# llm.
+
 
 def sanitize_api_messages(raw_messages: list[dict]) -> list[dict]:
     """
@@ -118,12 +112,10 @@ def apply_sliding_window(raw_messages: list[dict], max_history: int = 20) -> lis
 
 
 class Agent:
-    provider: str = "mistral"
     def __init__(self):
         config = Config()
         self.config = config
         self.console = get_console() 
-        self.provider = os.getenv("LLM_PROVIDER", "mistral").lower()
         self.client = self.create_model()
         self.prompt = prompts.Prompt()
         self.memory: Memory = Memory() 
@@ -132,7 +124,7 @@ class Agent:
         self._pending_prompt_tokens = 0
         self._pending_completion_tokens = 0
         self._pending_total_tokens = 0
-        print(self.provider, self.config.model)
+        print(self.config.provider, self.config.model)
 
     def _persist_session_usage(self) -> None:
         session = self.memory.session
@@ -204,7 +196,7 @@ class Agent:
     @property
     def model_name(self) -> str:
         model_str = str(self.config.model.value) if hasattr(self.config.model, "value") else str(self.config.model)
-        if self.provider == "nvidia" and ("mistral-medium" in model_str or "mistral-embed" in model_str or "/" not in model_str):
+        if self.config.provider == "nvidia" and ("mistral-medium" in model_str or "mistral-embed" in model_str or "/" not in model_str):
             return os.getenv("LLM_MODEL", "meta/llama-3.1-70b-instruct")
         return os.getenv("LLM_MODEL", model_str)
 
@@ -329,6 +321,8 @@ class Agent:
                 }
                 if use_tools:
                     kwargs["tools"] = TOOLS
+                if not self.client:
+                    return None   
                 result["response"] = self.client.chat.completions.create(**kwargs)
             except Exception as exc:
                 result["error"] = exc
@@ -446,9 +440,11 @@ class Agent:
         return self.chat(user_query)
 
     def create_model(self):
-        endpoint = PROVIDERS_ENDPOINTS.get(self.provider, "https://api.mistral.ai/v1")
+        if not self.config.api_key:
+            return None
+        endpoint = PROVIDERS_ENDPOINTS.get(self.config.provider, "https://api.mistral.ai/v1")
         return OpenAI(
-            api_key=api_key,
+            api_key=self.config.api_key,
             base_url=endpoint
         )
         
