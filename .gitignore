@@ -12,6 +12,7 @@ wheels/
 web/
 server/
 .pi_history
-.memory/
+.pi-python/
 skills/
 docs/
+flower-garden/

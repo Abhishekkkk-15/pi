@@ -23,7 +23,7 @@ class Memory:
     def init_session(self, title: str, initial_messages: list[Message] = None) -> Session:
         id = generate_chat_id()
         workspace = Path.cwd()
-        history_path = workspace / ".memory" / id
+        history_path = workspace / ".pi-python" / id
         history_path.mkdir(parents=True, exist_ok=True)
         conversation_jsonl = history_path / "conversation_history.jsonl"
         conversation_jsonl.touch()
@@ -40,7 +40,7 @@ class Memory:
         return session
     
     def load_old_sessions(self) -> list[Session]:
-        memory_path = Path.cwd() / ".memory"
+        memory_path = Path.cwd() / ".pi-python"
 
         if not memory_path.exists():
             return []
