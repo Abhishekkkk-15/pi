@@ -4,7 +4,7 @@ from models import Models, Message, Role
 from rich.traceback import install
 from console import get_console
 from interrupt import AgentInterrupted
-
+from commands import Commands
 import sys
 
 install(show_locals=True)
@@ -15,6 +15,7 @@ def main():
     args = parser.parse_args()
 
     agent = llm.Agent()
+    commands = Commands(agent=agent)
     if args.autonomous_risk:
         agent.config.autonomous_risk = True
 
@@ -34,21 +35,23 @@ def main():
             
             if not user_query.strip():
                 continue
-              
-            if user_query == "/resume":
-                old_sessions = agent.memory.load_old_sessions()
-                if not old_sessions:
-                    agent.console.print_system_message("No previous sessions found.", "Resume")
-                    continue
-                selected_session = agent.console.interactive_select(old_sessions)
-                agent.console.clear_screen()
-                old_chats = agent.memory.load_session_chat(selected_session.history_path, system_prompt=agent.prompt.raw_system_prompt)
-                agent.memory.session = selected_session
-                agent.console.print_welcome(selected_session.title, str(selected_session.workspace))
-                agent.console.print_chat_history(old_chats)
-                agent.console.print_system_message(f"Resumed session: {selected_session.title}")
-                
+            continue_true = commands.router(user_query)  
+            if continue_true:
                 continue
+            # if user_query == "/resume":
+            #     old_sessions = agent.memory.load_old_sessions()
+            #     if not old_sessions:
+            #         agent.console.print_system_message("No previous sessions found.", "Resume")
+            #         continue
+            #     selected_session = agent.console.interactive_select(old_sessions)
+            #     agent.console.clear_screen()
+            #     old_chats = agent.memory.load_session_chat(selected_session.history_path, system_prompt=agent.prompt.raw_system_prompt)
+            #     agent.memory.session = selected_session
+            #     agent.console.print_welcome(selected_session.title, str(selected_session.workspace))
+            #     agent.console.print_chat_history(old_chats)
+            #     agent.console.print_system_message(f"Resumed session: {selected_session.title}")
+                
+            #     continue
                 
             # Print user message once (prompt echo is erased in get_user_input)
             agent.console.print_user_message(user_query)
