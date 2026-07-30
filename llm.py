@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from models import Role,Message, Session
 from tools import TOOLS, execute_read, execute_write, execute_edit, execute_bash, execute_web_search
 from console import get_console
-from config import Config
+from config import Config, estimate_cost
 from memory import Memory
 from dataclasses import asdict
 load_dotenv()
@@ -129,7 +129,78 @@ class Agent:
         self.memory: Memory = Memory() 
         self.memory.messages = [Message(role=Role.SYSTEM, content=self.prompt.prompts[0])]
         self.console = get_console()
+        self._pending_prompt_tokens = 0
+        self._pending_completion_tokens = 0
+        self._pending_total_tokens = 0
         print(self.provider, self.config.model)
+
+    def _persist_session_usage(self) -> None:
+        session = self.memory.session
+        if not session:
+            return
+        meta_path = session.history_path.parent / "metadata.json"
+        self.memory.write_to_json(meta_path, session)
+
+    def _flush_pending_usage(self) -> None:
+        session = self.memory.session
+        if not session:
+            return
+        if not (
+            self._pending_total_tokens
+            or self._pending_prompt_tokens
+            or self._pending_completion_tokens
+        ):
+            return
+        session.prompt_tokens += self._pending_prompt_tokens
+        session.completion_tokens += self._pending_completion_tokens
+        session.total_tokens += self._pending_total_tokens
+        session.estimated_cost_usd += estimate_cost(
+            self._pending_prompt_tokens,
+            self._pending_completion_tokens,
+            self.config.input_price_per_mtok,
+            self.config.output_price_per_mtok,
+        )
+        self._pending_prompt_tokens = 0
+        self._pending_completion_tokens = 0
+        self._pending_total_tokens = 0
+        self._persist_session_usage()
+
+    def _record_usage(self, response: Any) -> None:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion = int(getattr(usage, "completion_tokens", 0) or 0)
+        total = int(getattr(usage, "total_tokens", 0) or (prompt + completion))
+        if prompt == 0 and completion == 0 and total == 0:
+            return
+        session = self.memory.session
+        if session is None:
+            self._pending_prompt_tokens += prompt
+            self._pending_completion_tokens += completion
+            self._pending_total_tokens += total
+            return
+        session.prompt_tokens += prompt
+        session.completion_tokens += completion
+        session.total_tokens += total
+        session.estimated_cost_usd += estimate_cost(
+            prompt,
+            completion,
+            self.config.input_price_per_mtok,
+            self.config.output_price_per_mtok,
+        )
+        self._persist_session_usage()
+
+    def print_session_usage(self) -> None:
+        session = self.memory.session
+        if not session:
+            return
+        self.console.print_usage_summary(
+            session.prompt_tokens,
+            session.completion_tokens,
+            session.total_tokens,
+            session.estimated_cost_usd,
+        )
     @property
     def model_name(self) -> str:
         model_str = str(self.config.model.value) if hasattr(self.config.model, "value") else str(self.config.model)
@@ -156,6 +227,7 @@ class Agent:
                 messages=[{"role": "user", "content": prompt_str}],
                 use_tools=False,
             )
+            self._record_usage(response)
             content = (response.choices[0].message.content or "").strip()
             import re
             json_match = re.search(r'\[.*?\]', content, re.DOTALL)
@@ -321,6 +393,7 @@ class Agent:
                     )
                     return None
 
+                self._record_usage(res)
                 llm_res = res.choices[0]
 
                 tool_calls_raw = llm_res.message.tool_calls

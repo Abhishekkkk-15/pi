@@ -760,6 +760,21 @@ class ConsoleUI:
     # Misc
     # ------------------------------------------------------------------
 
+    def print_usage_summary(
+        self,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        estimated_cost_usd: float,
+    ) -> None:
+        """Quiet one-line session token/cost summary."""
+        line = (
+            f"tokens {total_tokens:,} "
+            f"(in {prompt_tokens:,} / out {completion_tokens:,}) "
+            f"~ ${estimated_cost_usd:.4f}"
+        )
+        self.console.print(Text(line, style=THEME["muted"]))
+
     def print_separator(self):
         self.console.print("─" * self.console.width, style=THEME["muted"])
 

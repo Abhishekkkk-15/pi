@@ -59,6 +59,7 @@ def main():
                 if agent.memory.session is None:
                     session = agent.memory.init_session(user_query, initial_messages=agent.memory.messages) 
                     agent.current_session = session  # type: ignore
+                    agent._flush_pending_usage()
                     agent.console.clear_screen()
                     agent.console.print_welcome(session.title, str(session.workspace))
                     agent.console.print_system_message("New Conversation started")
@@ -71,12 +72,14 @@ def main():
             # Interrupted or LLM error already handled/persisted inside Agent.chat
             if response is None:
                 agent.console.print_separator()
+                agent.print_session_usage()
                 continue
 
             # Print assistant response
             agent.console.print_separator()
             agent.console.print_assistant_message(response.message.content)  # type: ignore
             agent.console.print_separator()
+            agent.print_session_usage()
             
         except KeyboardInterrupt:
             # At the prompt: exit. During a turn, Agent.chat already handled interrupt.
@@ -84,6 +87,7 @@ def main():
             break
         except AgentInterrupted:
             agent.console.print_separator()
+            agent.print_session_usage()
             continue
         except Exception as e:
             agent.console.print_error(f"An error occurred: {str(e)}")
@@ -98,6 +102,7 @@ def main():
                     agent.memory.session.history_path, [err_msg], mode="a"
                 )
             agent.console.print_separator()
+            agent.print_session_usage()
 
 
 if __name__ == "__main__":

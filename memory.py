@@ -65,7 +65,11 @@ class Memory:
                                     "allow_all": False,
                                     "allowed_tools": [],
                                     "allowed_targets": {}
-                                })
+                                }),
+                                prompt_tokens=int(data.get("prompt_tokens", 0) or 0),
+                                completion_tokens=int(data.get("completion_tokens", 0) or 0),
+                                total_tokens=int(data.get("total_tokens", 0) or 0),
+                                estimated_cost_usd=float(data.get("estimated_cost_usd", 0.0) or 0.0),
                             )
                             sessions.append(session)
                     except (json.JSONDecodeError, KeyError, OSError):
