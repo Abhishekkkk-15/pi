@@ -24,7 +24,6 @@ PROVIDERS_ENDPOINTS: dict[str, str] = {
     "mistral": "https://api.mistral.ai/v1",  
 }
 
-from langchain_nvidia_ai_endpoints import NVIDIA
 
 
 def sanitize_api_messages(raw_messages: list[dict]) -> list[dict]:
@@ -120,7 +119,6 @@ class Agent:
         self.prompt = prompts.Prompt()
         self.memory: Memory = Memory() 
         self.memory.messages = [Message(role=Role.SYSTEM, content=self.prompt.prompts[0])]
-        self.console = get_console()
         self._pending_prompt_tokens = 0
         self._pending_completion_tokens = 0
         self._pending_total_tokens = 0

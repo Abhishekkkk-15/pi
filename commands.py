@@ -1,6 +1,12 @@
 from llm import Agent
 from typing import Any, Callable, Dict, List
 import inspect
+
+commands:List[Dict[str, Callable[..., Any]]] = [] 
+
+def get_commands()->List[Dict[str, Callable[..., Any]]]:
+    return commands
+
 class Commands:
     
     def __init__(self,agent:Agent) -> None:
