@@ -95,6 +95,8 @@ class Commands:
             agent.console._session_title,
             agent.console._session_workspace,
             is_auth=agent.config.api_key,
+            provider=agent.config.provider,
+            model=str(agent.config.model),
         )
         return True
 
@@ -145,35 +147,57 @@ class Commands:
             selected_session.title,
             str(selected_session.workspace),
             is_auth=agent.config.api_key,
+            provider=agent.config.provider,
+            model=str(agent.config.model),
         )
         agent.console.print_chat_history(old_chats)
         agent.console.print_system_message(f"Resumed session: {selected_session.title}")
         return True
 
     def login(self) -> bool:
-        """Authenticate provider API key"""
+        """Set Primary/Secondary API key (supports rate-limit failover)"""
+        from config import get_provider_settings, set_provider_key
+
         agent = self.agent
+        console = agent.console
         provider = agent.config.provider
-        api_key = agent.console.get_api_key(provider)
+        settings = get_provider_settings(provider)
+        key_count = int(settings.get("key_count", 0) or 0)
+        active_idx = int(settings.get("active_key_index", 0) or 0)
+
+        slot_labels = [
+            f"Primary{'  (set)' if key_count >= 1 else '  (empty)'}"
+            f"{'  [active]' if active_idx == 0 and key_count >= 1 else ''}",
+            f"Secondary{'  (set)' if key_count >= 2 else '  (empty)'}"
+            f"{'  [active]' if active_idx == 1 and key_count >= 2 else ''}",
+        ]
+        picked = console.interactive_pick(
+            slot_labels,
+            title=f"Select API key slot for '{provider}'",
+            current=slot_labels[active_idx] if key_count else None,
+        )
+        if not picked:
+            console.print_system_message("Login cancelled.", title="Auth")
+            return True
+        slot = 0 if picked.startswith("Primary") else 1
+        slot_name = "Primary" if slot == 0 else "Secondary"
+
+        api_key = console.get_api_key(f"{provider} ({slot_name})")
         if not api_key:
             return True
 
         try:
-            from config import upsert_provider_settings
-
-            upsert_provider_settings(
-                provider,
-                api_key=api_key,
-                make_active=True,
-            )
-            agent.config.api_key = api_key
-            agent.client = agent.create_model()
-            agent.console.print_system_message(
-                f"API key saved for provider '{provider}'.",
+            set_provider_key(provider, slot, api_key, make_active_slot=True)
+            agent.apply_provider_runtime()
+            updated = get_provider_settings(provider)
+            console.print_system_message(
+                f"{slot_name} API key saved for '{provider}'.\n"
+                f"Keys configured: {updated.get('key_count', 0)}/2\n"
+                f"Active slot: {'Primary' if updated.get('active_key_index', 0) == 0 else 'Secondary'}",
                 title="Auth Success",
             )
         except Exception as e:
-            agent.console.print_error(f"Failed to save credentials: {e}", title="Auth Error")
+            console.print_error(f"Failed to save credentials: {e}", title="Auth Error")
         return True
 
     def provider(self) -> bool:

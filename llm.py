@@ -321,33 +321,68 @@ class Agent:
         """
         Run chat.completions.create in a worker thread so ESC can interrupt
         while waiting on the network response.
+        On HTTP 429, rotate to the secondary API key (if configured) and retry once.
         """
-        result: dict[str, Any] = {"response": None, "error": None}
+        from config import rotate_provider_key
 
-        def _run() -> None:
-            try:
-                kwargs: dict[str, Any] = {
-                    "model": self.model_name,
-                    "messages": messages,
-                }
-                if use_tools:
-                    kwargs["tools"] = TOOLS
-                if not self.client:
-                    return None   
-                result["response"] = self.client.chat.completions.create(**kwargs)
-            except Exception as exc:
-                result["error"] = exc
+        def _is_rate_limit(exc: BaseException) -> bool:
+            name = type(exc).__name__
+            if "RateLimit" in name:
+                return True
+            status = getattr(exc, "status_code", None)
+            if status == 429:
+                return True
+            resp = getattr(exc, "response", None)
+            if resp is not None and getattr(resp, "status_code", None) == 429:
+                return True
+            msg = str(exc).lower()
+            return "rate limit" in msg or "429" in msg
 
-        worker = threading.Thread(target=_run, name="llm-completion", daemon=True)
-        worker.start()
-        while worker.is_alive():
-            if interrupt_controller.interrupted:
-                raise AgentInterrupted("Execution stopped by user")
-            worker.join(timeout=0.1)
+        def _run_once() -> tuple[Any, Optional[BaseException]]:
+            result: dict[str, Any] = {"response": None, "error": None}
 
-        if result["error"] is not None:
-            raise result["error"]
-        return result["response"]
+            def _run() -> None:
+                try:
+                    kwargs: dict[str, Any] = {
+                        "model": self.model_name,
+                        "messages": messages,
+                    }
+                    if use_tools:
+                        kwargs["tools"] = TOOLS
+                    if not self.client:
+                        result["error"] = RuntimeError(
+                            "No LLM client configured. Run /login first."
+                        )
+                        return
+                    result["response"] = self.client.chat.completions.create(**kwargs)
+                except Exception as exc:
+                    result["error"] = exc
+
+            worker = threading.Thread(target=_run, name="llm-completion", daemon=True)
+            worker.start()
+            while worker.is_alive():
+                if interrupt_controller.interrupted:
+                    raise AgentInterrupted("Execution stopped by user")
+                worker.join(timeout=0.1)
+            return result["response"], result["error"]
+
+        response, error = _run_once()
+        if error is None:
+            return response
+
+        if _is_rate_limit(error):
+            new_key = rotate_provider_key(self.config.provider)
+            if new_key:
+                self.apply_provider_runtime()
+                slot = "Primary" if self.config.active_key_index == 0 else "Secondary"
+                self.console.console.print(
+                    f"[dim]Switched to {slot} API key after rate limit, retrying...[/dim]"
+                )
+                response, error = _run_once()
+                if error is None:
+                    return response
+
+        raise error
 
     def chat(self, user_query: str) -> Optional[Any]:
         interrupt_controller.start()

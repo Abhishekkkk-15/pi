@@ -231,7 +231,7 @@ class ConsoleUI:
             ("/verbose", "Show full tool output"),
             ("/copy", "Copy last assistant reply to clipboard"),
             ("/resume", "Resume a previous session"),
-            ("/login", "Authenticate provider API key"),
+            ("/login", "Set Primary/Secondary API key (rate-limit failover)"),
             ("/provider", "Change LLM provider"),
             ("/model", "Change model for active provider"),
             ("/exit", "End the session"),
@@ -729,6 +729,8 @@ class ConsoleUI:
         title: str = " ",
         ws_path: str = "",
         is_auth: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
     ):
         if title and title.strip():
             self._session_title = title
@@ -746,6 +748,13 @@ class ConsoleUI:
                 style="bold cyan",
             )
 
+        if provider or model:
+            welcome_text.append("\n")
+            welcome_text.append(
+                f"  Provider: {provider or '-'}  |  Model: {model or '-'}  ",
+                style="bold cyan",
+            )
+
         welcome_text.append("\n")
         welcome_text.append("  Type 'exit' or 'quit' to end - /help for commands  ", style=THEME["muted"])
         welcome_text.append("\n")
@@ -758,7 +767,7 @@ class ConsoleUI:
 
         if not is_auth:
             auth_warning = Text()
-            auth_warning.append("⚠️  No API Key / Credentials Found\n", style=THEME["warn"])
+            auth_warning.append("WARNING: No API Key / Credentials Found\n", style=THEME["warn"])
             auth_warning.append(
                 "You are currently unauthenticated. Run ", style="white"
             )

@@ -19,7 +19,11 @@ def main():
         agent.config.autonomous_risk = True
 
     # Print welcome message
-    agent.console.print_welcome(is_auth=agent.config.api_key)
+    agent.console.print_welcome(
+        is_auth=agent.config.api_key,
+        provider=agent.config.provider,
+        model=str(agent.config.model),
+    )
     if agent.config.autonomous_risk:
         agent.console.print_error("⚠️ AUTONOMOUS RISK MODE ACTIVE: All tool actions will execute without confirmation prompts.", "Autonomous Mode")
     
@@ -49,7 +53,13 @@ def main():
                     agent.current_session = session  # type: ignore
                     agent._flush_pending_usage()
                     agent.console.clear_screen()
-                    agent.console.print_welcome(session.title, str(session.workspace), is_auth=agent.config.api_key)
+                    agent.console.print_welcome(
+                        session.title,
+                        str(session.workspace),
+                        is_auth=agent.config.api_key,
+                        provider=agent.config.provider,
+                        model=str(agent.config.model),
+                    )
                     agent.console.print_system_message("New Conversation started")
                     # clear_screen wiped the User block — print it again
                     agent.console.print_user_message(user_query)
