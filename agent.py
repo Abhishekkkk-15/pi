@@ -5,7 +5,6 @@ from rich.traceback import install
 from console import get_console
 from interrupt import AgentInterrupted
 from commands import Commands
-import sys
 
 install(show_locals=True)
 
@@ -26,21 +25,18 @@ def main():
     
     while True:
         try:
-            # Get user input with enhanced UI
             user_query = agent.console.get_user_input("Task")
-            
-            if user_query.lower() in ['exit', 'quit']:
-                agent.console.print_system_message("Goodbye!", "Exit")
-                break
-            
+
             if not user_query.strip():
                 continue
-            continue_true = commands.router(user_query)  
-            if continue_true:
-                if user_query == "/login":
-                    agent.client = agent.create_model()
+
+            # All slash / alias commands are handled in commands.py
+            result = commands.router(user_query)
+            if result == "exit":
+                break
+            if result:
                 continue
-                
+
             agent.console.print_user_message(user_query)
             agent.console.print_separator()
             if not agent.config.api_key:

@@ -103,6 +103,22 @@ class ConsoleUI:
         self._last_assistant_message: str = ""
         self._session_title: str = " "
         self._session_workspace: str = ""
+        self._slash_commands: List[str] = [
+            "/help",
+            "/clear",
+            "/quiet",
+            "/verbose",
+            "/copy",
+            "/resume",
+            "/login",
+            "/exit",
+            "exit",
+            "quit",
+        ]
+
+    def set_slash_commands(self, commands: List[str]) -> None:
+        """Update autocomplete list from Commands registry."""
+        self._slash_commands = list(commands)
 
     def _setup_history(self) -> None:
         history_path = Path(self.history_file)
@@ -202,17 +218,19 @@ class ConsoleUI:
             return False
         return False
 
-    def _print_help(self) -> None:
+    def print_help(self, command_rows: Optional[List[tuple[str, str]]] = None) -> None:
+        """Print slash-command help. Rows come from Commands when available."""
         help_body = Text()
         help_body.append("Commands\n", style="bold cyan")
-        rows = [
+        rows = command_rows or [
             ("/help", "Show this help"),
             ("/clear", "Clear the screen"),
             ("/quiet", "Collapse tool output to one-liners"),
             ("/verbose", "Show full tool output"),
             ("/copy", "Copy last assistant reply to clipboard"),
             ("/resume", "Resume a previous session"),
-            ("/login", "Authenticate provider api key"),
+            ("/login", "Authenticate provider API key"),
+            ("/exit", "End the session"),
             ("exit / quit", "End the session"),
         ]
         for cmd, desc in rows:
@@ -237,58 +255,21 @@ class ConsoleUI:
         help_body.append(mode, style="bold cyan")
 
         self.console.print(
-            Panel(help_body, title="[bold cyan]Help[/bold cyan]", border_style=THEME["accent"], box=box.ROUNDED)
+            Panel(
+                help_body,
+                title="[bold cyan]Help[/bold cyan]",
+                border_style=THEME["accent"],
+                box=box.ROUNDED,
+            )
         )
 
-    def _handle_local_command(self, raw: str) -> bool:
-        """
-        Handle UI-only slash commands.
-        Returns True if the input was consumed (caller should re-prompt).
-        """
-        cmd = raw.strip().lower()
-        if cmd in ("/help", "help"):
-            self._print_help()
-            return True
-        if cmd == "/clear":
-            self.clear_screen()
-            return True
-        if cmd == "/quiet":
-            self.quiet = True
-            self.verbose = False
-            self.print_system_message("Tool output collapsed (quiet mode).", title="Mode")
-            return True
-        if cmd == "/verbose":
-            self.quiet = False
-            self.verbose = True
-            self.print_system_message("Full tool output enabled (verbose mode).", title="Mode")
-            return True
-        if cmd == "/copy":
-            if not self._last_assistant_message:
-                self.print_error("No assistant message to copy yet.", title="Copy")
-            elif self._copy_to_clipboard(self._last_assistant_message):
-                self.print_system_message("Last assistant reply copied to clipboard.", title="Copy")
-            else:
-                self.print_error("Could not access the system clipboard.", title="Copy")
-            return True
-        return False
-
     def _get_completer(self) -> Completer:
-        commands = [
-            "/resume",
-            "/help",
-            "/clear",
-            "/quiet",
-            "/verbose",
-            "/copy",
-            "exit",
-            "quit",
-        ]
+        commands = self._slash_commands
 
         class SlashCompleter(Completer):
             def get_completions(self, document, complete_event):
                 word = document.get_word_before_cursor()
                 text = document.text_before_cursor
-                # Complete slash commands from start of line
                 if text.lstrip().startswith("/") or not text.strip():
                     prefix = text.lstrip()
                     for cmd in commands:
@@ -383,9 +364,8 @@ class ConsoleUI:
             text = (user_input or "").strip()
             if not text:
                 return ""
-            if self._handle_local_command(text):
-                continue
             # Drop the raw prompt echo; caller prints a single User block
+            # (or handles slash commands without duplicating Task > line)
             self._erase_prompt_echo(f"{prompt} > {user_input}")
             return text
 
