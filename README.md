@@ -78,10 +78,30 @@ Typical layout:
 ```
 .pi-python/
 ├── auth.json                 # providers, API keys, Tavily key
+├── skills/                   # global skills (optional)
 └── <session-id>/
     ├── metadata.json
     └── conversation_history.jsonl
 ```
+
+## Skills
+
+Skills are markdown files the agent can load on demand for a task. They are discovered from the **project you are working in**, so an installed CLI picks up each project's own skills. Search order (first match wins):
+
+1. `<project>/.pi-python/skills/`
+2. `<project>/skills/`
+3. `<data root>/skills/` — global skills (`~/.pi-python/skills`, or the repo's `.pi-python/skills` in development)
+
+Both layouts work:
+
+```
+skills/
+├── deploy/
+│   └── SKILL.md      # skill named "deploy"
+└── lint.md           # skill named "lint"
+```
+
+Only these directories are scanned, so stray markdown elsewhere in your project (like `README.md`) is never treated as a skill.
 
 ## Configuration
 

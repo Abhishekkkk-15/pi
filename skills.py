@@ -3,82 +3,121 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from memory import get_data_root
+
 
 class Skills:
-    SKILLS_DIRS = [
-        Path(__file__).parent / "skills",
-        Path(__file__).parent,
-        Path.cwd() / "skills",
-        Path.cwd(),
-    ]
     FILENAME = "SKILL.md"
 
     _cache: Dict[str, str] = {}
     _paths: Dict[str, Path] = {}
+    _scanned_cwd: Optional[Path] = None
+
+    @classmethod
+    def search_dirs(cls) -> List[Path]:
+        """
+        Skill locations, highest precedence first.
+
+        Skills come from the project the user is working in (cwd), so an
+        installed CLI picks up that project's skills. Global skills in the
+        data root (~/.pi-python/skills, or the repo's .pi-python in dev)
+        are available everywhere.
+        """
+        workspace = Path.cwd()
+        candidates = [
+            workspace / ".pi-python" / "skills",
+            workspace / "skills",
+            get_data_root() / "skills",
+        ]
+
+        seen: set[Path] = set()
+        dirs: List[Path] = []
+        for path in candidates:
+            resolved = path.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                dirs.append(path)
+        return dirs
 
     @classmethod
     def refresh(cls) -> None:
         """Reload all skills into memory, supporting skills/<skill_name>/SKILL.md structure."""
         cls._cache.clear()
         cls._paths.clear()
+        cls._scanned_cwd = Path.cwd()
 
-        for base_dir in cls.SKILLS_DIRS:
-            if not base_dir.exists():
+        for base_dir in cls.search_dirs():
+            if not base_dir.is_dir():
                 continue
 
             # 1. Folder structure: skills/<skill_name>/SKILL.md
-            for folder in base_dir.iterdir():
-                if folder.is_dir():
-                    skill_name = folder.name
-                    skill_file = folder / cls.FILENAME
-                    if not skill_file.exists():
-                        skill_file = folder / "skill.md"
-                    if not skill_file.exists():
-                        md_files = list(folder.glob("*.md"))
-                        if md_files:
-                            skill_file = md_files[0]
+            for folder in sorted(base_dir.iterdir()):
+                if not folder.is_dir() or folder.name.startswith("."):
+                    continue
 
-                    if skill_file.exists() and skill_file.is_file():
+                skill_name = folder.name
+                if skill_name in cls._cache:
+                    continue  # earlier dir wins
+
+                skill_file = folder / cls.FILENAME
+                if not skill_file.exists():
+                    skill_file = folder / "skill.md"
+                if not skill_file.exists():
+                    md_files = sorted(folder.glob("*.md"))
+                    if md_files:
+                        skill_file = md_files[0]
+
+                if skill_file.is_file():
+                    try:
                         cls._cache[skill_name] = skill_file.read_text(encoding="utf-8")
-                        cls._paths[skill_name] = skill_file
+                    except OSError:
+                        continue
+                    cls._paths[skill_name] = skill_file
 
             # 2. Direct file structure: skills/<skill_name>.md
-            for file in base_dir.glob("*.md"):
-                if file.is_file() and file.stem.upper() != "SKILL":
-                    skill_name = file.stem
-                    if skill_name not in cls._cache:
-                        cls._cache[skill_name] = file.read_text(encoding="utf-8")
-                        cls._paths[skill_name] = file
+            for file in sorted(base_dir.glob("*.md")):
+                if not file.is_file() or file.stem.upper() == "SKILL":
+                    continue
+                skill_name = file.stem
+                if skill_name in cls._cache:
+                    continue
+                try:
+                    cls._cache[skill_name] = file.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                cls._paths[skill_name] = file
+
+    @classmethod
+    def _ensure_loaded(cls) -> None:
+        """Refresh on first use, or when the working directory changed."""
+        if not cls._cache or cls._scanned_cwd != Path.cwd():
+            cls.refresh()
 
     @classmethod
     def names(cls) -> List[str]:
         """Return all available skill names (folder names or file stems)."""
-        if not cls._cache:
-            cls.refresh()
+        cls._ensure_loaded()
 
         return sorted(cls._cache.keys())
 
     @classmethod
     def exists(cls, skill_name: str) -> bool:
         """Check whether a skill exists."""
-        if not cls._cache:
-            cls.refresh()
+        cls._ensure_loaded()
 
         return skill_name in cls._cache
 
     @classmethod
     def load(cls, skill_name: str) -> Optional[str]:
         """Load a skill's content."""
-        if not cls._cache:
-            cls.refresh()
+        cls._ensure_loaded()
 
         return cls._cache.get(skill_name)
 
     @classmethod
     def load_many(cls, skill_names: List[str]) -> Dict[str, str]:
         """Load multiple skills at once."""
-        if not cls._cache:
-            cls.refresh()
+        cls._ensure_loaded()
 
         return {
             name: content
@@ -97,8 +136,7 @@ class Skills:
         Search skills by name and optionally content.
         Returns matching skill names.
         """
-        if not cls._cache:
-            cls.refresh()
+        cls._ensure_loaded()
 
         query = query.lower().strip()
         matches = []
@@ -130,7 +168,6 @@ class Skills:
     @classmethod
     def path(cls, skill_name: str) -> Optional[Path]:
         """Return the file path for a skill."""
-        if not cls._cache:
-            cls.refresh()
+        cls._ensure_loaded()
 
         return cls._paths.get(skill_name)

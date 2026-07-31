@@ -22,9 +22,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 py-modules = ["agent", "llm", "console", "interrupt", "permissions", "skills", "tools", "config", "memory", "models", "commands"]
 packages = ["prompts"]
+include-package-data = true
 
 [tool.setuptools.package-data]
-"*" = ["prompts/*.md", "skills/**/*.md", "skills/*.md"]
+prompts = ["*.md"]
 
 [project.scripts]
 pi-python = "agent:main"

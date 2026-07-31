@@ -1,5 +1,6 @@
 from models import Message
 import xml.etree.ElementTree as ET
+from importlib import resources
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -8,11 +9,32 @@ class Prompt:
     raw_system_prompt: str
 
     def __init__(self):
-        prompt_path = Path(__file__).parent / "SYSTEM.md"
-        if not prompt_path.exists():
-            prompt_path = Path("./prompts/SYSTEM.md")
-        self.raw_system_prompt = prompt_path.read_text(encoding="utf-8")
+        self.raw_system_prompt = self._read_system_prompt()
         self.prompts = [self.raw_system_prompt]
+
+    @staticmethod
+    def _read_system_prompt() -> str:
+        # Installed package data first, then source checkout / cwd fallbacks.
+        candidates = [
+            Path(__file__).resolve().parent / "SYSTEM.md",
+            Path.cwd() / "prompts" / "SYSTEM.md",
+        ]
+        for path in candidates:
+            if path.is_file():
+                return path.read_text(encoding="utf-8")
+
+        try:
+            return resources.files(__package__).joinpath("SYSTEM.md").read_text(
+                encoding="utf-8"
+            )
+        except (FileNotFoundError, ModuleNotFoundError, TypeError):
+            pass
+
+        raise FileNotFoundError(
+            "SYSTEM.md not found. The prompts package data is missing from the "
+            "installation; reinstall pi-python (pip install --force-reinstall .). "
+            f"Looked in: {', '.join(str(p) for p in candidates)}"
+        )
 
     def get_system_prompt(self, active_skills: Optional[Dict[str, str]] = None) -> str:
         """
