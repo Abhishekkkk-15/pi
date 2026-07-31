@@ -5,7 +5,7 @@ import prompts
 from enum import Enum
 from dotenv import load_dotenv
 from models import Role,Message, Session
-from tools import TOOLS, execute_read, execute_write, execute_edit, execute_bash, execute_web_search
+from tools import TOOLS, execute_read, execute_write, execute_edit, execute_bash, execute_web_search, execute_grep
 from console import get_console
 from config import Config, estimate_cost, BUILTIN_PROVIDERS
 from memory import Memory
@@ -551,6 +551,24 @@ class Agent:
             if not self.check_and_request_permission(tool_name, query, f"Agent wants to run web_search: '{query}'"):
                 return "User permission denied"
             return execute_web_search(query, max_results=max_results)
+
+        elif tool_name == "grep":
+            pattern = args.get("pattern", "")
+            path = args.get("path", ".") or "."
+            glob = args.get("glob", "") or ""
+            case_insensitive = bool(args.get("case_insensitive", False))
+            max_results = args.get("max_results", 50)
+            if not self.check_and_request_permission(
+                tool_name, path, f"Agent wants to grep '{pattern}' in {path}"
+            ):
+                return "User permission denied"
+            return execute_grep(
+                pattern=pattern,
+                path=path,
+                glob=glob,
+                case_insensitive=case_insensitive,
+                max_results=max_results,
+            )
 
         else:
             return f"Unknown tool: {tool_name}"

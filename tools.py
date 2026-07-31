@@ -1,10 +1,55 @@
 import os
+import re
 import sys
 import time
 import threading
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Any
+
+
+SKIP_DIR_NAMES = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    "dist",
+    "build",
+    ".pi-python",
+    ".memory",
+    ".cursor",
+}
+
+SKIP_FILE_SUFFIXES = {
+    ".pyc",
+    ".pyo",
+    ".exe",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".ico",
+    ".pdf",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".7z",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+}
 
 
 def _kill_process_tree(pid: int):
@@ -223,6 +268,93 @@ def execute_web_search(query: str, max_results: int = 5) -> str:
         return f"Error executing web search: {str(e)}"
 
 
+def execute_grep(
+    pattern: str,
+    path: str = ".",
+    glob: str = "",
+    case_insensitive: bool = False,
+    max_results: int = 50,
+) -> str:
+    """
+    Search file contents for a regex/text pattern (cross-platform).
+    Returns matching lines as path:line:content.
+    """
+    if not pattern:
+        return "Error: pattern is required."
+
+    flags = re.IGNORECASE if case_insensitive else 0
+    try:
+        regex = re.compile(pattern, flags)
+    except re.error as e:
+        return f"Error: invalid regex pattern: {e}"
+
+    root = Path(path or ".").expanduser()
+    if not root.exists():
+        return f"Error: path '{path}' does not exist."
+
+    matches: List[str] = []
+    files_searched = 0
+    truncated = False
+    max_results = max(1, min(int(max_results or 50), 200))
+
+    def _should_skip_dir(name: str) -> bool:
+        return name in SKIP_DIR_NAMES or name.startswith(".")
+
+    def _iter_files() -> Any:
+        if root.is_file():
+            yield root
+            return
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if not _should_skip_dir(d)]
+            for filename in filenames:
+                yield Path(dirpath) / filename
+
+    try:
+        for filepath in _iter_files():
+            if truncated:
+                break
+            if not filepath.is_file():
+                continue
+            if filepath.suffix.lower() in SKIP_FILE_SUFFIXES:
+                continue
+            if glob:
+                try:
+                    if not filepath.match(glob) and not Path(filepath.name).match(glob):
+                        continue
+                except Exception:
+                    continue
+
+            files_searched += 1
+            try:
+                text = filepath.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+
+            for line_no, line in enumerate(text.splitlines(), 1):
+                if regex.search(line):
+                    rel = filepath
+                    try:
+                        rel = filepath.resolve().relative_to(Path.cwd().resolve())
+                    except Exception:
+                        rel = filepath
+                    matches.append(f"{rel}:{line_no}:{line.rstrip()}")
+                    if len(matches) >= max_results:
+                        truncated = True
+                        break
+
+        if not matches:
+            scope = f" in '{path}'" if path and path != "." else ""
+            g = f" (glob={glob})" if glob else ""
+            return f"No matches for /{pattern}/{scope}{g}. Searched {files_searched} file(s)."
+
+        header = f"Found {len(matches)} match(es) in {files_searched} file(s)"
+        if truncated:
+            header += f" (truncated at {max_results})"
+        return header + ":\n" + "\n".join(matches)
+    except Exception as e:
+        return f"Error executing grep: {e}"
+
+
 TOOLS = [
     {
         "type": "function",
@@ -342,5 +474,41 @@ TOOLS = [
                 "required": ["query"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep",
+            "description": (
+                "Search the workspace for a text/regex pattern across files. "
+                "Prefer this over bash grep/findstr for code discovery."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regex or plain text pattern to search for."
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File or directory to search (default: current workspace)."
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "Optional filename glob filter, e.g. '*.py' or '*.ts'."
+                    },
+                    "case_insensitive": {
+                        "type": "boolean",
+                        "description": "Case-insensitive search (default: false)."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum matches to return (default: 50, max: 200)."
+                    }
+                },
+                "required": ["pattern"]
+            }
+        }
     }
-]
+]

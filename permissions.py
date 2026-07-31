@@ -21,8 +21,8 @@ class PermissionManager:
             # Extract first command token (e.g., 'npm' from 'npm run dev')
             parts = target.split()
             return parts[0] if parts else target
-        elif tool_name in ("read", "write", "edit"):
-            # Standardize file path
+        elif tool_name in ("read", "write", "edit", "grep"):
+            # Standardize file/directory path
             try:
                 return str(Path(target).resolve())
             except Exception:
@@ -45,7 +45,7 @@ class PermissionManager:
                 # Matches if command starts with saved prefix or token
                 if target_lower.startswith(saved_lower) or target_lower == saved_lower:
                     return True
-            elif tool_name in ("read", "write", "edit"):
+            elif tool_name in ("read", "write", "edit", "grep"):
                 # Exact file path match or directory prefix match
                 if target_lower == saved_lower or target_lower.startswith(saved_lower + os.sep):
                     return True
