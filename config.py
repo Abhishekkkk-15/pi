@@ -319,6 +319,31 @@ def upsert_provider_settings(
     return data
 
 
+def get_tavily_api_key(auth: Optional[dict[str, Any]] = None) -> str:
+    """Return Tavily API key from auth.json credentials, falling back to env."""
+    data = auth if auth is not None else load_auth()
+    creds = data.get("credentials") if isinstance(data.get("credentials"), dict) else {}
+    key = (creds.get("tavily_api_key") or "").strip()
+    if key:
+        return key
+    return (os.getenv("TAVILY_API_KEY") or "").strip()
+
+
+def set_tavily_api_key(api_key: str, auth: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Persist Tavily API key under credentials.tavily_api_key in auth.json."""
+    key = (api_key or "").strip()
+    if not key:
+        raise ValueError("tavily_api_key cannot be empty")
+    data = auth if auth is not None else load_auth()
+    if not isinstance(data, dict):
+        data = {}
+    creds = data.get("credentials") if isinstance(data.get("credentials"), dict) else {}
+    creds["tavily_api_key"] = key
+    data["credentials"] = creds
+    save_auth(data)
+    return data
+
+
 class Config:
     tavily_api_key: str | None = None
     is_dev: bool = True
@@ -352,7 +377,7 @@ class Config:
         self.active_key_index = int(settings.get("active_key_index", 0) or 0)
         self.key_count = int(settings.get("key_count", 0) or 0)
 
-        self.tavily_api_key = os.getenv("TAVILY_API_KEY")
+        self.tavily_api_key = get_tavily_api_key(auth) or None
 
         env_mode = os.getenv("ENVIRONMENT") or os.getenv("enviroment") or os.getenv("ENV")
         self.is_dev = (
@@ -388,3 +413,4 @@ class Config:
         self.model = settings["model"] or self.model
         self.active_key_index = int(settings.get("active_key_index", 0) or 0)
         self.key_count = int(settings.get("key_count", 0) or 0)
+        self.tavily_api_key = get_tavily_api_key(auth) or None

@@ -200,6 +200,34 @@ class Commands:
             console.print_error(f"Failed to save credentials: {e}", title="Auth Error")
         return True
 
+    def tavily(self) -> bool:
+        """Set Tavily API key for web_search"""
+        from config import set_tavily_api_key, get_tavily_api_key
+
+        agent = self.agent
+        console = agent.console
+        existing = get_tavily_api_key()
+        if existing:
+            console.print_system_message(
+                "A Tavily API key is already configured (will be overwritten if you continue).",
+                title="Tavily",
+            )
+
+        api_key = console.get_api_key("Tavily")
+        if not api_key:
+            return True
+
+        try:
+            set_tavily_api_key(api_key)
+            agent.config.tavily_api_key = api_key
+            console.print_system_message(
+                "Tavily API key saved to auth.json.",
+                title="Tavily",
+            )
+        except Exception as e:
+            console.print_error(f"Failed to save Tavily API key: {e}", title="Tavily")
+        return True
+
     def provider(self) -> bool:
         """Change LLM provider (mistral / groq / custom)"""
         from config import (

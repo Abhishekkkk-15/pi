@@ -180,9 +180,14 @@ def execute_bash(command: str, timeout: int = 30, is_background: bool = False) -
 
 def execute_web_search(query: str, max_results: int = 5) -> str:
     """Executes a real-time web search using the Tavily API."""
-    api_key = os.getenv("TAVILY_API_KEY")
+    from config import get_tavily_api_key
+
+    api_key = get_tavily_api_key()
     if not api_key:
-        return "Error: TAVILY_API_KEY environment variable is not set. Please add TAVILY_API_KEY to your .env file."
+        return (
+            "Error: Tavily API key is not set. "
+            "Run /tavily to save it, or set TAVILY_API_KEY in your environment."
+        )
 
     try:
         try:
