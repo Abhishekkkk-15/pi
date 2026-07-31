@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import os
 from typing import Any, Optional
 
-from memory import Memory
+from memory import Memory, is_development
 
 load_dotenv()
 
@@ -379,10 +379,7 @@ class Config:
 
         self.tavily_api_key = get_tavily_api_key(auth) or None
 
-        env_mode = os.getenv("ENVIRONMENT") or os.getenv("enviroment") or os.getenv("ENV")
-        self.is_dev = (
-            env_mode.lower() in ("dev", "development", "true", "1") if env_mode else True
-        )
+        self.is_dev = is_development()
 
         max_hist = os.getenv("MAX_HISTORY_MESSAGES")
         if max_hist and max_hist.isdigit():
