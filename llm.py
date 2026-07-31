@@ -115,7 +115,6 @@ class Agent:
         self._pending_prompt_tokens = 0
         self._pending_completion_tokens = 0
         self._pending_total_tokens = 0
-        print(self.config.provider, self.config.model)
 
     def _persist_session_usage(self) -> None:
         session = self.memory.session
@@ -221,6 +220,7 @@ class Agent:
             f"User Task: \"{user_query}\"\n\n"
             f"Available Skills: {available}\n\n"
             f"Select which skill names from the Available Skills list are relevant for fulfilling the user task.\n"
+            f"Max 3 skills to be selected.\n"
             f"Return ONLY a JSON array of matching skill names, e.g. [\"react\", \"git\"]. If none are relevant, return []."
         )
 
