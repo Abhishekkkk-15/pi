@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Union
 
 from llm import Agent
 
@@ -153,21 +153,174 @@ class Commands:
     def login(self) -> bool:
         """Authenticate provider API key"""
         agent = self.agent
-        api_key = agent.console.get_api_key(agent.config.provider)
+        provider = agent.config.provider
+        api_key = agent.console.get_api_key(provider)
         if not api_key:
             return True
 
         try:
-            auth_root = agent.memory.root / "auth.json"
-            data = agent.memory.read_from_json(auth_root) or {}
-            credentials = data.get("credentials") or {}
-            credentials["api_key"] = api_key
-            data["credentials"] = credentials
-            agent.memory.write_to_json(auth_root, data)
+            from config import upsert_provider_settings
+
+            upsert_provider_settings(
+                provider,
+                api_key=api_key,
+                make_active=True,
+            )
             agent.config.api_key = api_key
             agent.client = agent.create_model()
+            agent.console.print_system_message(
+                f"API key saved for provider '{provider}'.",
+                title="Auth Success",
+            )
         except Exception as e:
             agent.console.print_error(f"Failed to save credentials: {e}", title="Auth Error")
+        return True
+
+    def provider(self) -> bool:
+        """Change LLM provider (mistral / groq / custom)"""
+        from config import (
+            BUILTIN_PROVIDERS,
+            list_provider_names,
+            set_active_provider,
+            upsert_provider_settings,
+            get_provider_settings,
+        )
+
+        agent = self.agent
+        console = agent.console
+        ADD_CUSTOM = "+ Add custom provider"
+
+        names = list_provider_names()
+        labels = []
+        for name in names:
+            settings = get_provider_settings(name)
+            kind = "custom" if settings.get("is_custom") else "built-in"
+            url = settings.get("base_url") or ""
+            short_url = url if len(url) <= 40 else url[:37] + "..."
+            labels.append(f"{name}  [{kind}]  {short_url}")
+        labels.append(ADD_CUSTOM)
+
+        # Map label -> name for selection
+        label_to_name = {labels[i]: names[i] for i in range(len(names))}
+        label_to_name[ADD_CUSTOM] = ADD_CUSTOM
+
+        current_label = None
+        for label, name in label_to_name.items():
+            if name == agent.config.provider:
+                current_label = label
+                break
+
+        picked = console.interactive_pick(
+            labels,
+            title=f"Select provider (active: {agent.config.provider})",
+            current=current_label,
+        )
+        if not picked:
+            console.print_system_message("Provider selection cancelled.", title="Provider")
+            return True
+
+        if picked == ADD_CUSTOM or label_to_name.get(picked) == ADD_CUSTOM:
+            name = console.prompt_text("Custom provider name (e.g. ollama)")
+            if not name:
+                console.print_system_message("Cancelled.", title="Provider")
+                return True
+            name = name.strip().lower().replace(" ", "-")
+            if name in BUILTIN_PROVIDERS:
+                console.print_error(
+                    f"'{name}' is a built-in provider name. Choose another.",
+                    title="Provider",
+                )
+                return True
+            base_url = console.prompt_text(
+                "OpenAI-compatible base URL",
+                default="http://localhost:11434/v1",
+            )
+            if not base_url:
+                console.print_system_message("Cancelled.", title="Provider")
+                return True
+            api_key = console.get_api_key(name) or "no-key"
+            upsert_provider_settings(
+                name,
+                api_key=api_key,
+                base_url=base_url.rstrip("/"),
+                is_custom=True,
+                make_active=True,
+            )
+            agent.apply_provider_runtime()
+            console.print_system_message(
+                f"Custom provider '{name}' saved and activated.\n"
+                f"Endpoint: {base_url}\n"
+                f"Tip: run /model to pick a model.",
+                title="Provider",
+            )
+            return True
+
+        provider_name = label_to_name[picked]
+        set_active_provider(provider_name)
+        agent.apply_provider_runtime()
+
+        settings = get_provider_settings(provider_name)
+        msg = (
+            f"Active provider: {provider_name}\n"
+            f"Model: {settings.get('model') or '(none)'}\n"
+            f"Endpoint: {settings.get('base_url') or '(none)'}"
+        )
+        if not settings.get("api_key"):
+            msg += "\nNo API key yet — run /login to authenticate."
+        console.print_system_message(msg, title="Provider")
+        return True
+
+    def model(self) -> bool:
+        """Change model for the active provider"""
+        from config import upsert_provider_settings, get_provider_settings
+
+        agent = self.agent
+        console = agent.console
+        provider = agent.config.provider
+
+        if not agent.config.api_key:
+            console.print_error(
+                "No API key for the active provider. Run /login first.",
+                title="Model",
+            )
+            return True
+        if not agent.config.base_url:
+            console.print_error(
+                "No base URL configured for this provider.",
+                title="Model",
+            )
+            return True
+
+        console.print_system_message(
+            f"Fetching models from {provider} ({agent.config.base_url})...",
+            title="Model",
+        )
+        try:
+            models = agent.list_available_models()
+        except Exception as e:
+            console.print_error(f"Failed to list models: {e}", title="Model")
+            return True
+
+        if not models:
+            console.print_error("Provider returned no models.", title="Model")
+            return True
+
+        current = str(agent.config.model)
+        picked = console.interactive_pick(
+            models,
+            title=f"Select model ({provider}) — {len(models)} available",
+            current=current if current in models else None,
+        )
+        if not picked:
+            console.print_system_message("Model selection cancelled.", title="Model")
+            return True
+
+        upsert_provider_settings(provider, model=picked, make_active=True)
+        agent.config.model = picked
+        console.print_system_message(
+            f"Model set to '{picked}' for provider '{provider}'.",
+            title="Model",
+        )
         return True
 
     def exit(self) -> str:

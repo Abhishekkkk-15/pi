@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from models import Role,Message, Session
 from tools import TOOLS, execute_read, execute_write, execute_edit, execute_bash, execute_web_search
 from console import get_console
-from config import Config, estimate_cost
+from config import Config, estimate_cost, BUILTIN_PROVIDERS
 from memory import Memory
 from dataclasses import asdict
 load_dotenv()
@@ -15,15 +15,8 @@ import json
 import threading
 from skills import Skills
 from permissions import PermissionManager, PermissionDecision
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 from interrupt import AgentInterrupted, interrupt_controller
-
-PROVIDERS = Literal["nvidia", "mistral"]
-PROVIDERS_ENDPOINTS: dict[str, str] = {
-    "nvidia": "https://integrate.api.nvidia.com/v1",  
-    "mistral": "https://api.mistral.ai/v1",  
-}
-
 
 
 def sanitize_api_messages(raw_messages: list[dict]) -> list[dict]:
@@ -194,9 +187,29 @@ class Agent:
     @property
     def model_name(self) -> str:
         model_str = str(self.config.model.value) if hasattr(self.config.model, "value") else str(self.config.model)
-        if self.config.provider == "nvidia" and ("mistral-medium" in model_str or "mistral-embed" in model_str or "/" not in model_str):
-            return os.getenv("LLM_MODEL", "meta/llama-3.1-70b-instruct")
-        return os.getenv("LLM_MODEL", model_str)
+        return model_str
+
+    def list_available_models(self) -> list[str]:
+        """Fetch model IDs from the active provider's OpenAI-compatible /models endpoint."""
+        if not self.config.api_key:
+            raise RuntimeError("No API key configured. Run /login first.")
+        base_url = self.config.base_url or BUILTIN_PROVIDERS.get(
+            self.config.provider, {}
+        ).get("base_url", "https://api.mistral.ai/v1")
+        client = self.client or OpenAI(api_key=self.config.api_key, base_url=base_url)
+        response = client.models.list()
+        ids = []
+        for m in getattr(response, "data", []) or []:
+            mid = getattr(m, "id", None)
+            if mid:
+                ids.append(str(mid))
+        return sorted(set(ids), key=str.lower)
+
+    def apply_provider_runtime(self) -> None:
+        """Reload config from auth.json and rebuild the OpenAI client."""
+        self.config.reload_from_auth()
+        self.client = self.create_model()
+
 
     def select_relevant_skills(self, user_query: str) -> list[str]:
         
@@ -440,13 +453,15 @@ class Agent:
     def create_model(self):
         if not self.config.api_key:
             return None
-        endpoint = PROVIDERS_ENDPOINTS.get(self.config.provider, "https://api.mistral.ai/v1")
+        endpoint = (
+            self.config.base_url
+            or BUILTIN_PROVIDERS.get(self.config.provider, {}).get("base_url")
+            or "https://api.mistral.ai/v1"
+        )
         return OpenAI(
             api_key=self.config.api_key,
-            base_url=endpoint
+            base_url=endpoint,
         )
-        
-        res.choices["messages"][-1].content
     def check_and_request_permission(self, tool_name: str, target: str, action_details: str) -> bool:
         """Checks if permission is pre-approved, otherwise prompts the user with persistent options."""
         if PermissionManager.check_permission(self.memory.session, tool_name, target, self.config.autonomous_risk):

@@ -111,6 +111,8 @@ class ConsoleUI:
             "/copy",
             "/resume",
             "/login",
+            "/provider",
+            "/model",
             "/exit",
             "exit",
             "quit",
@@ -230,6 +232,8 @@ class ConsoleUI:
             ("/copy", "Copy last assistant reply to clipboard"),
             ("/resume", "Resume a previous session"),
             ("/login", "Authenticate provider API key"),
+            ("/provider", "Change LLM provider"),
+            ("/model", "Change model for active provider"),
             ("/exit", "End the session"),
             ("exit / quit", "End the session"),
         ]
@@ -464,6 +468,119 @@ class ConsoleUI:
                 self.print_error(f"Invalid selection. Choose a number between 1 and {len(items)}.")
             except ValueError:
                 self.print_error("Please enter a valid number.")
+
+    def interactive_pick(
+        self,
+        items: List[str],
+        title: str = "Select an option",
+        current: Optional[str] = None,
+        window_size: int = 12,
+    ) -> Optional[str]:
+        """
+        Arrow-key picker for string options.
+        Returns the selected string, or None if cancelled.
+        """
+        self.stop_loading()
+        if not items:
+            raise ValueError("No items to select from")
+
+        selected = {"index": 0}
+        if current and current in items:
+            selected["index"] = items.index(current)
+
+        def _visible_slice() -> tuple[int, int]:
+            n = len(items)
+            if n <= window_size:
+                return 0, n
+            half = window_size // 2
+            start = max(0, selected["index"] - half)
+            end = min(n, start + window_size)
+            start = max(0, end - window_size)
+            return start, end
+
+        def get_text() -> FormattedText:
+            fragments: list[tuple[str, str]] = [
+                ("bold", f"{title}\n"),
+                ("class:muted", "Up/Down move | Enter select | Esc cancel\n\n"),
+            ]
+            start, end = _visible_slice()
+            if start > 0:
+                fragments.append(("class:muted", f"  ... {start} more above\n"))
+            for i in range(start, end):
+                marker = ">" if i == selected["index"] else " "
+                label = items[i]
+                suffix = "  (current)" if current and label == current else ""
+                style = "class:selected" if i == selected["index"] else ""
+                fragments.append((style, f"{marker} {label}{suffix}\n"))
+            if end < len(items):
+                fragments.append(("class:muted", f"  ... {len(items) - end} more below\n"))
+            return FormattedText(fragments)
+
+        kb = KeyBindings()
+
+        @kb.add("up")
+        def _up(event) -> None:
+            selected["index"] = (selected["index"] - 1) % len(items)
+
+        @kb.add("down")
+        def _down(event) -> None:
+            selected["index"] = (selected["index"] + 1) % len(items)
+
+        @kb.add("enter")
+        def _enter(event) -> None:
+            event.app.exit(result=items[selected["index"]])
+
+        @kb.add("escape")
+        def _esc(event) -> None:
+            event.app.exit(result=None)
+
+        style = PtStyle.from_dict({
+            "selected": "bold reverse cyan",
+            "muted": "italic #888888",
+        })
+
+        try:
+            app: Application[Optional[str]] = Application(
+                layout=Layout(Window(FormattedTextControl(get_text), always_hide_cursor=True)),
+                key_bindings=kb,
+                style=style,
+                full_screen=False,
+            )
+            return app.run()
+        except Exception:
+            # Numeric fallback
+            self.console.print(
+                Panel(Text(title, style="bold cyan"), border_style=THEME["accent"], box=box.ROUNDED)
+            )
+            for i, item in enumerate(items, 1):
+                mark = " (current)" if current and item == current else ""
+                self.console.print(f"[bold cyan]{i}.[/bold cyan] {item}{mark}")
+            while True:
+                try:
+                    from rich.prompt import Prompt
+
+                    choice = Prompt.ask("Enter number (or blank to cancel)", console=self.console, default="")
+                    if not choice.strip():
+                        return None
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(items):
+                        return items[idx]
+                    self.print_error(f"Choose 1-{len(items)}.")
+                except ValueError:
+                    self.print_error("Please enter a valid number.")
+
+    def prompt_text(self, label: str, default: str = "") -> Optional[str]:
+        """Prompt for a single line of text. Returns None on cancel/empty when no default."""
+        self.stop_loading()
+        try:
+            value = PtPrompt(f"{label} > ", default=default).strip()
+        except KeyboardInterrupt:
+            return None
+        except Exception:
+            from rich.prompt import Prompt
+
+            value = Prompt.ask(label, default=default, console=self.console).strip()
+        return value or None
 
     # ------------------------------------------------------------------
     # Message printers
