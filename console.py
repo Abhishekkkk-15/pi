@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import json
+import os
 import re
 import subprocess
 import sys
@@ -32,6 +33,7 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import Layout
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.containers import Window
@@ -44,33 +46,123 @@ from models import Session
 # Theme tokens
 # ---------------------------------------------------------------------------
 
-ACCENT = "#d98452"
-ACCENT_DIM = "#a8613a"
-INK = "#e6e6e6"
-SUBTLE = "#8a8a8a"
-
-THEME = {
-    "brand": f"bold {ACCENT}",
-    "accent": ACCENT,
-    "user": SUBTLE,
-    "user_border": SUBTLE,
-    "user_title": SUBTLE,
-    "assistant": INK,
-    "assistant_border": ACCENT,
-    "assistant_title": ACCENT,
-    "system_border": SUBTLE,
-    "tool": ACCENT,
-    "tool_border": SUBTLE,
-    "tool_title": ACCENT,
-    "tool_result": SUBTLE,
-    "error": "red",
-    "error_border": "red",
-    "error_title": "bold red",
-    "muted": "dim",
-    "warn": "yellow",
-    "ok": "bold green",
-    "deny": "bold red",
+THEMES: dict[str, dict[str, str]] = {
+    "ember": {
+        "accent": "#d98452",
+        "accent_dim": "#a8613a",
+        "ink": "#e6e6e6",
+        "subtle": "#8a8a8a",
+        "warn": "yellow",
+        "error": "red",
+        "ok": "green",
+    },
+    "mono": {
+        "accent": "#f2f2f2",
+        "accent_dim": "#6f6f6f",
+        "ink": "#dcdcdc",
+        "subtle": "#7d7d7d",
+        "warn": "#c8c8c8",
+        "error": "#ff6b6b",
+        "ok": "#c8c8c8",
+    },
+    "ocean": {
+        "accent": "#4bb3d4",
+        "accent_dim": "#2b6f88",
+        "ink": "#e3edf2",
+        "subtle": "#7d97a3",
+        "warn": "#e6c07b",
+        "error": "#ef6b73",
+        "ok": "#5fc9a0",
+    },
+    "forest": {
+        "accent": "#7cc47f",
+        "accent_dim": "#4a7a4d",
+        "ink": "#e6efe4",
+        "subtle": "#849586",
+        "warn": "#d8bd6a",
+        "error": "#e0736b",
+        "ok": "#7cc47f",
+    },
+    "violet": {
+        "accent": "#b48ee8",
+        "accent_dim": "#70539b",
+        "ink": "#ece7f5",
+        "subtle": "#93899f",
+        "warn": "#e2c169",
+        "error": "#ec6f8b",
+        "ok": "#8fd6a8",
+    },
+    "contrast": {
+        "accent": "bright_yellow",
+        "accent_dim": "yellow",
+        "ink": "bright_white",
+        "subtle": "white",
+        "warn": "bright_yellow",
+        "error": "bright_red",
+        "ok": "bright_green",
+    },
 }
+
+DEFAULT_THEME = "ember"
+
+# Live style globals — rebound by apply_theme(), read at call time everywhere
+ACCENT = THEMES[DEFAULT_THEME]["accent"]
+ACCENT_DIM = THEMES[DEFAULT_THEME]["accent_dim"]
+INK = THEMES[DEFAULT_THEME]["ink"]
+SUBTLE = THEMES[DEFAULT_THEME]["subtle"]
+
+THEME: dict[str, str] = {}
+_active_theme = DEFAULT_THEME
+
+
+def apply_theme(name: str) -> str:
+    """Rebind palette globals in place. Returns the theme actually applied."""
+    global ACCENT, ACCENT_DIM, INK, SUBTLE, _active_theme
+
+    key = (name or "").strip().lower()
+    if key not in THEMES:
+        key = DEFAULT_THEME
+    palette = THEMES[key]
+
+    ACCENT = palette["accent"]
+    ACCENT_DIM = palette["accent_dim"]
+    INK = palette["ink"]
+    SUBTLE = palette["subtle"]
+    _active_theme = key
+
+    # Mutated in place so existing THEME references stay valid
+    THEME.update(
+        {
+            "brand": f"bold {ACCENT}",
+            "accent": ACCENT,
+            "user": SUBTLE,
+            "user_border": SUBTLE,
+            "user_title": SUBTLE,
+            "assistant": INK,
+            "assistant_border": ACCENT,
+            "assistant_title": ACCENT,
+            "system_border": SUBTLE,
+            "tool": ACCENT,
+            "tool_border": SUBTLE,
+            "tool_title": ACCENT,
+            "tool_result": SUBTLE,
+            "error": palette["error"],
+            "error_border": palette["error"],
+            "error_title": f"bold {palette['error']}",
+            "muted": "dim",
+            "warn": palette["warn"],
+            "ok": f"bold {palette['ok']}",
+            "deny": f"bold {palette['error']}",
+        }
+    )
+    return key
+
+
+def active_theme() -> str:
+    return _active_theme
+
+
+apply_theme(DEFAULT_THEME)
 
 TOOL_PREVIEW_CHARS = 400
 TOOL_PREVIEW_LINES = 12
@@ -104,6 +196,93 @@ else:
         "dot": "-",
         "arrow": "->",
     }
+
+
+# Descriptions for the command palette; unknown commands still list by name.
+COMMAND_HINTS: dict[str, str] = {
+    "/help": "Show help",
+    "/clear": "Clear the screen",
+    "/quiet": "Collapse tool output to one-liners",
+    "/verbose": "Show full tool output",
+    "/copy": "Copy last assistant reply",
+    "/resume": "Resume a previous session",
+    "/login": "Set Primary/Secondary API key",
+    "/tavily": "Set Tavily API key for web_search",
+    "/provider": "Change LLM provider",
+    "/model": "Change model for active provider",
+    "/history": "Set max messages kept in context",
+    "/prices": "Set token price estimates",
+    "/tokens": "Count tokens in session history",
+    "/theme": "Change the color theme",
+    "/exit": "End the session",
+    "exit": "End the session",
+    "quit": "End the session",
+}
+
+# Handled inside the console; never forwarded to the command router.
+LOCAL_COMMANDS = ("/theme",)
+
+PALETTE_SENTINEL = "\x00palette\x00"
+
+
+def _theme_store_path() -> Optional[Path]:
+    """Where the theme preference lives (inside the agent data root)."""
+    try:
+        from memory import get_data_root
+
+        root = get_data_root()
+        root.mkdir(parents=True, exist_ok=True)
+        return root / "theme.txt"
+    except Exception:
+        return None
+
+
+def _load_theme_preference() -> str:
+    env_theme = (os.getenv("PI_THEME") or "").strip().lower()
+    if env_theme in THEMES:
+        return env_theme
+    path = _theme_store_path()
+    if path and path.is_file():
+        try:
+            saved = path.read_text(encoding="utf-8").strip().lower()
+            if saved in THEMES:
+                return saved
+        except OSError:
+            pass
+    return DEFAULT_THEME
+
+
+def _save_theme_preference(name: str) -> None:
+    path = _theme_store_path()
+    if not path:
+        return
+    try:
+        path.write_text(name, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _fuzzy_score(query: str, *fields: str) -> Optional[int]:
+    """Subsequence match across fields. Lower score = better. None = no match."""
+    if not query:
+        return 0
+    for rank, field in enumerate(fields):
+        target = field.lower()
+        if query in target:
+            return rank * 100 + target.index(query)
+        # subsequence fallback: /pv matches /provider
+        pos, gaps, last = 0, 0, -1
+        for ch in query:
+            found = target.find(ch, pos)
+            if found == -1:
+                break
+            if last >= 0:
+                gaps += found - last - 1
+            last = found
+            pos = found + 1
+        else:
+            return rank * 100 + 50 + gaps
+    return None
 
 
 class TimedStatus:
@@ -142,6 +321,7 @@ class ConsoleUI:
         self._session_title: str = " "
         self._session_workspace: str = ""
         self._at_gap: bool = True
+        self.theme: str = apply_theme(_load_theme_preference())
         self._slash_commands: List[str] = [
             "/help",
             "/clear",
@@ -153,14 +333,68 @@ class ConsoleUI:
             "/tavily",
             "/provider",
             "/model",
+            "/theme",
             "/exit",
             "exit",
             "quit",
         ]
 
     def set_slash_commands(self, commands: List[str]) -> None:
-        """Update autocomplete list from Commands registry."""
-        self._slash_commands = list(commands)
+        """Update autocomplete list from Commands registry (plus console-local ones)."""
+        names = [str(c) for c in commands]
+        for local in LOCAL_COMMANDS:
+            if local not in names:
+                names.append(local)
+        self._slash_commands = names
+
+    # ------------------------------------------------------------------
+    # Themes
+    # ------------------------------------------------------------------
+
+    def theme_names(self) -> List[str]:
+        return list(THEMES)
+
+    def set_theme(self, name: str, *, persist: bool = True, announce: bool = True) -> str:
+        """Switch palette at runtime. Returns the theme actually applied."""
+        applied = apply_theme(name)
+        self.theme = applied
+        if persist:
+            _save_theme_preference(applied)
+        if announce:
+            self.print_theme_preview(applied)
+        return applied
+
+    def print_theme_preview(self, name: Optional[str] = None) -> None:
+        """Small swatch so the user sees the palette immediately."""
+        label = name or self.theme
+        swatch = Text()
+        swatch.append(f"{GLYPH['bullet']} accent  ", style=ACCENT)
+        swatch.append("ink  ", style=INK)
+        swatch.append("subtle  ", style=SUBTLE)
+        swatch.append("warn  ", style=THEME["warn"])
+        swatch.append("error", style=THEME["error"])
+
+        header = Text()
+        header.append("theme ", style="dim")
+        header.append(label, style=f"bold {ACCENT}")
+
+        self._emit(Group(header, swatch), gap_before=True)
+
+    def _pick_theme(self) -> None:
+        """Interactive theme chooser used by the console-local /theme command."""
+        names = self.theme_names()
+        labels = [
+            f"{name}{'  (current)' if name == self.theme else ''}" for name in names
+        ]
+        picked = self.interactive_pick(
+            labels,
+            title="Select a theme",
+            current=next((l for l in labels if "(current)" in l), None),
+        )
+        if not picked:
+            self.print_system_message("Theme unchanged.", title="theme")
+            return
+        self.set_theme(picked.split("  (current)")[0].strip())
 
     def _setup_history(self) -> None:
         history_path = Path(self.history_file)
@@ -224,7 +458,10 @@ class ConsoleUI:
         grid.add_row(marker_text, body)
         return grid
 
-    def _card(self, body: RenderableType, title: str = "", border: str = SUBTLE) -> Panel:
+    def _card(
+        self, body: RenderableType, title: str = "", border: Optional[str] = None
+    ) -> Panel:
+        border = border or SUBTLE
         return Panel(
             body,
             title=f"[{border}]{title}[/{border}]" if title else None,
@@ -330,6 +567,11 @@ class ConsoleUI:
             ("exit / quit", "End the session"),
         ]
 
+        listed = {cmd for cmd, _ in rows}
+        for local in LOCAL_COMMANDS:
+            if local not in listed:
+                rows = list(rows) + [(local, COMMAND_HINTS.get(local, local))]
+
         commands = Table.grid(padding=(0, 2))
         commands.add_column(style=ACCENT, no_wrap=True)
         commands.add_column(style="dim", overflow="fold")
@@ -341,6 +583,7 @@ class ConsoleUI:
         keys.add_column(style="dim", overflow="fold")
         for key, desc in [
             ("enter", "Submit task"),
+            ("ctrl+p  or  /", "Open the command palette"),
             ("ctrl+j", "Insert newline"),
             ("esc esc+enter", "Insert newline (alt)"),
             ("esc", "Stop the current agent turn"),
@@ -353,6 +596,8 @@ class ConsoleUI:
         footer = Text()
         footer.append("tool output ", style="dim")
         footer.append(mode, style=ACCENT)
+        footer.append("   theme ", style="dim")
+        footer.append(self.theme, style=ACCENT)
 
         self._emit(
             Group(
@@ -368,6 +613,125 @@ class ConsoleUI:
         )
         self.console.print()
         self._at_gap = True
+
+    def command_palette(self, initial_query: str = "") -> Optional[str]:
+        """
+        Fuzzy slash-command palette (type to filter, up/down, enter, esc).
+        Returns the chosen command string, or None if cancelled.
+        """
+        self.stop_loading()
+        entries = [
+            (name, COMMAND_HINTS.get(name, ""))
+            for name in self._slash_commands
+            if name.startswith("/")
+        ]
+        if not entries:
+            return None
+
+        state = {"query": initial_query.lstrip("/"), "index": 0}
+
+        def matches() -> List[tuple[str, str]]:
+            query = state["query"].strip().lower()
+            if not query:
+                return entries
+            scored = []
+            for name, desc in entries:
+                score = _fuzzy_score(query, name.lstrip("/"), desc)
+                if score is not None:
+                    scored.append((score, name, desc))
+            scored.sort(key=lambda row: (row[0], row[1]))
+            return [(name, desc) for _, name, desc in scored]
+
+        def get_text() -> FormattedText:
+            rows = matches()
+            if rows:
+                state["index"] %= len(rows)
+            width = max((len(name) for name, _ in rows), default=10)
+
+            fragments: list[tuple[str, str]] = [
+                ("class:title", "Commands  "),
+                ("class:muted", "type to filter  enter run  esc cancel\n"),
+                ("class:prompt", f"{GLYPH['prompt']} "),
+                ("class:query", f"{state['query']}\n\n"),
+            ]
+            if not rows:
+                fragments.append(("class:muted", "  no matching command\n"))
+            for i, (name, desc) in enumerate(rows[:12]):
+                chosen = i == state["index"]
+                marker = GLYPH["prompt"] if chosen else " "
+                style = "class:selected" if chosen else "class:item"
+                fragments.append((style, f"{marker} {name.ljust(width)}  "))
+                fragments.append(
+                    ("class:selected" if chosen else "class:muted", f"{desc}\n")
+                )
+            if len(rows) > 12:
+                fragments.append(("class:muted", f"  ... {len(rows) - 12} more\n"))
+            return FormattedText(fragments)
+
+        kb = KeyBindings()
+
+        @kb.add("up")
+        def _up(event) -> None:
+            rows = matches()
+            if rows:
+                state["index"] = (state["index"] - 1) % len(rows)
+
+        @kb.add("down")
+        def _down(event) -> None:
+            rows = matches()
+            if rows:
+                state["index"] = (state["index"] + 1) % len(rows)
+
+        @kb.add("backspace")
+        def _backspace(event) -> None:
+            state["query"] = state["query"][:-1]
+            state["index"] = 0
+
+        @kb.add("c-u")
+        def _clear(event) -> None:
+            state["query"] = ""
+            state["index"] = 0
+
+        @kb.add("enter")
+        def _enter(event) -> None:
+            rows = matches()
+            event.app.exit(result=rows[state["index"]][0] if rows else None)
+
+        @kb.add("escape")
+        @kb.add("c-c")
+        def _cancel(event) -> None:
+            event.app.exit(result=None)
+
+        @kb.add(Keys.Any)
+        def _typed(event) -> None:
+            char = event.data
+            if char and char.isprintable():
+                state["query"] += char
+                state["index"] = 0
+
+        style = PtStyle.from_dict(
+            {
+                "title": f"bold {ACCENT}",
+                "prompt": f"bold {ACCENT}",
+                "query": INK,
+                "item": INK,
+                "selected": f"bold {ACCENT}",
+                "muted": f"italic {SUBTLE}",
+            }
+        )
+
+        try:
+            app: Application[Optional[str]] = Application(
+                layout=Layout(
+                    Window(FormattedTextControl(get_text), always_hide_cursor=True)
+                ),
+                key_bindings=kb,
+                style=style,
+                full_screen=False,
+            )
+            return app.run()
+        except Exception:
+            return None
 
     def _get_completer(self) -> Completer:
         commands = self._slash_commands
@@ -450,6 +814,11 @@ class ConsoleUI:
         def _newline_esc_enter(event) -> None:
             event.current_buffer.insert_text("\n")
 
+        @bindings.add("c-p")
+        def _open_palette(event) -> None:
+            # Nested apps can't run inside the prompt; exit and reopen after.
+            event.app.exit(result=PALETTE_SENTINEL)
+
         pt_style = PtStyle.from_dict(
             {
                 "prompt": f"{ACCENT} bold",
@@ -477,13 +846,35 @@ class ConsoleUI:
                 user_input = input(f"{GLYPH['prompt']} ")
 
             text = (user_input or "").strip()
+
+            # ctrl+p, or a bare "/", opens the command palette
+            if text == PALETTE_SENTINEL or text == "/":
+                self._erase_prompt_echo(f"{GLYPH['prompt']} ")
+                picked = self.command_palette("" if text == "/" else "")
+                if not picked:
+                    self._at_gap = True
+                    continue
+                text = picked
+            elif text:
+                # Drop the raw prompt echo; caller prints a single user line
+                self._erase_prompt_echo(f"{GLYPH['prompt']} {user_input}")
+
             if not text:
                 self._at_gap = True
                 return ""
-            # Drop the raw prompt echo; caller prints a single user line
-            self._erase_prompt_echo(f"{GLYPH['prompt']} {user_input}")
+
+            # Console-local commands never reach the agent's command router
+            if text.lower() in LOCAL_COMMANDS:
+                self._handle_local_command(text.lower())
+                self._at_gap = True
+                continue
+
             self._at_gap = True
             return text
+
+    def _handle_local_command(self, command: str) -> None:
+        if command == "/theme":
+            self._pick_theme()
 
     def interactive_select(
         self,

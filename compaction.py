@@ -6,3 +6,5 @@ Use shared token helpers from ``tokenizer``::
 """
 
 from __future__ import annotations
+
+class Compaction:
