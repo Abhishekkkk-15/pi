@@ -3,24 +3,13 @@
 from __future__ import annotations
 
 import inspect
-import json
-import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from tokenizers import Tokenizer
-
 from llm import Agent
-from models import Message, Role
+from tokenizer import count_messages, tokens_by_role
 
 CommandResult = Union[bool, str, None]
-
-# Hugging Face tokenizer ids used for local counting (approx. for the active provider).
-_PROVIDER_TOKENIZERS: Dict[str, str] = {
-    "mistral": "mistralai/Mistral-7B-v0.1",
-    "groq": "Xenova/gpt-4o",
-}
-_FALLBACK_TOKENIZER = "gpt2"
 
 
 class Commands:
@@ -36,8 +25,6 @@ class Commands:
 
     def __init__(self, agent: Agent) -> None:
         self.agent = agent
-        self._tokenizer: Optional[Tokenizer] = None
-        self._tokenizer_id: Optional[str] = None
         self.commands = self.get_methods()
         self.agent.console.set_slash_commands(self.command_names())
 
@@ -392,65 +379,6 @@ class Commands:
         )
         return True
 
-    def _resolve_tokenizer_id(self) -> str:
-        override = (os.getenv("TOKENIZER_ID") or "").strip()
-        if override:
-            return override
-        provider = (self.agent.config.provider or "").lower()
-        return _PROVIDER_TOKENIZERS.get(provider, _FALLBACK_TOKENIZER)
-
-    def _load_tokenizer(self) -> Tuple[Tokenizer, str]:
-        tokenizer_id = self._resolve_tokenizer_id()
-        if self._tokenizer is not None and self._tokenizer_id == tokenizer_id:
-            return self._tokenizer, tokenizer_id
-
-        try:
-            tokenizer = Tokenizer.from_pretrained(tokenizer_id)
-        except Exception as primary_err:
-            if tokenizer_id == _FALLBACK_TOKENIZER:
-                raise RuntimeError(
-                    f"Failed to load tokenizer '{tokenizer_id}': {primary_err}"
-                ) from primary_err
-            try:
-                tokenizer = Tokenizer.from_pretrained(_FALLBACK_TOKENIZER)
-                tokenizer_id = _FALLBACK_TOKENIZER
-            except Exception as fallback_err:
-                raise RuntimeError(
-                    f"Failed to load tokenizer '{self._resolve_tokenizer_id()}' "
-                    f"({primary_err}); fallback '{_FALLBACK_TOKENIZER}' also failed "
-                    f"({fallback_err})"
-                ) from fallback_err
-
-        self._tokenizer = tokenizer
-        self._tokenizer_id = tokenizer_id
-        return tokenizer, tokenizer_id
-
-    @staticmethod
-    def _message_to_text(message: Message) -> str:
-        role = (
-            message.role.value
-            if isinstance(message.role, Role)
-            else str(message.role)
-        )
-        parts: List[str] = [f"{role}: {message.content or ''}"]
-
-        tool_calls = getattr(message, "tool_calls", None)
-        if tool_calls:
-            try:
-                parts.append(json.dumps(tool_calls, default=str, ensure_ascii=False))
-            except TypeError:
-                parts.append(str(tool_calls))
-
-        tool_call_id = getattr(message, "tool_call_id", None)
-        if tool_call_id:
-            parts.append(f"tool_call_id={tool_call_id}")
-
-        name = getattr(message, "name", None)
-        if name:
-            parts.append(f"name={name}")
-
-        return "\n".join(parts)
-
     def _history_path(self) -> Optional[Path]:
         session = self.agent.memory.session
         if not session:
@@ -458,25 +386,18 @@ class Commands:
         path = Path(session.history_path)
         if path.is_file():
             return path
-        # history_path may point at the jsonl; also accept sibling default name
         candidate = path.parent / "conversation_history.jsonl"
         if candidate.is_file():
             return candidate
         return path if path.exists() else None
 
-    def _load_history_messages(self) -> Tuple[List[Message], Optional[Path]]:
+    def _load_history_messages(self) -> Tuple[List[Any], Optional[Path]]:
         path = self._history_path()
         if path is None:
             return [], None
         if not path.is_file():
             return [], path
         return self.agent.memory.read_from_jsonl(path), path
-
-    def _count_tokens(self, texts: List[str], tokenizer: Tokenizer) -> List[int]:
-        if not texts:
-            return []
-        encodings = tokenizer.encode_batch(texts)
-        return [len(enc.ids) for enc in encodings]
 
     def tokens(self) -> bool:
         """Count tokens in the current session conversation_history.jsonl"""
@@ -509,29 +430,18 @@ class Commands:
             return True
 
         try:
-            tokenizer, tokenizer_id = self._load_tokenizer()
+            counts, total, tokenizer_id = count_messages(
+                messages,
+                provider=agent.config.provider,
+            )
         except Exception as e:
             console.print_error(str(e), title="Tokens")
             return True
 
-        texts = [self._message_to_text(m) for m in messages]
-        counts = self._count_tokens(texts, tokenizer)
-        total = sum(counts)
-
-        by_role: Dict[str, int] = {}
-        msg_by_role: Dict[str, int] = {}
-        for message, count in zip(messages, counts):
-            role = (
-                message.role.value
-                if isinstance(message.role, Role)
-                else str(message.role)
-            )
-            by_role[role] = by_role.get(role, 0) + count
-            msg_by_role[role] = msg_by_role.get(role, 0) + 1
-
+        by_role = tokens_by_role(messages, counts)
         role_lines = "\n".join(
-            f"  {role}: {by_role[role]:,} tokens across {msg_by_role[role]} message(s)"
-            for role in sorted(by_role)
+            f"  {role}: {stats['tokens']:,} tokens across {stats['messages']} message(s)"
+            for role, stats in sorted(by_role.items())
         )
         api_line = (
             f"API-reported (session metadata): {session.total_tokens:,} "

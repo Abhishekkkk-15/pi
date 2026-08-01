@@ -21,7 +21,7 @@ requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["agent", "llm", "console", "interrupt", "permissions", "skills", "tools", "config", "memory", "models", "commands"]
+py-modules = ["agent", "llm", "console", "interrupt", "permissions", "skills", "tools", "config", "memory", "models", "commands", "tokenizer", "compaction"]
 packages = ["prompts"]
 include-package-data = true
 
