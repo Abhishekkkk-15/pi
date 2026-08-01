@@ -348,7 +348,7 @@ class Config:
     tavily_api_key: str | None = None
     is_dev: bool = True
     model: str = "mistral-large-latest"
-    max_history_messages: int = 50
+    max_history_messages: int = 32
     autonomous_risk: bool = False
     input_price_per_mtok: float = 0.50
     output_price_per_mtok: float = 1.50

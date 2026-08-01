@@ -112,6 +112,7 @@ Only these directories are scanned, so stray markdown elsewhere in your project 
 | `ENV` / `ENVIRONMENT` | `development` or `dev` → store data in the repo; otherwise use home |
 | `LLM_KEY` | Optional bootstrap API key (prefer `/login` for durable keys) |
 | `LLM_PROVIDER` | e.g. `mistral`, `groq` |
+| `TOKENIZER_ID` | Optional Hugging Face tokenizer id for `/tokens` (defaults by provider) |
 | `TAVILY_API_KEY` | Optional; prefer `/tavily` |
 
 You can also set keys interactively with `/login`, `/provider`, `/model`, and `/tavily` — they are saved in `auth.json` under the data root.
@@ -153,6 +154,7 @@ Task > Search the web for latest Python 3.14 features
 | `/login` | Set Primary/Secondary API key |
 | `/provider` | Switch provider (mistral / groq / custom) |
 | `/model` | Change model for the active provider |
+| `/tokens` | Count tokens in the current session history |
 | `/tavily` | Set Tavily API key for `web_search` |
 | `/exit` | End the session (`exit` / `quit` also work) |
 
