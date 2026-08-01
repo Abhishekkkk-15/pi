@@ -114,8 +114,11 @@ Only these directories are scanned, so stray markdown elsewhere in your project 
 | `LLM_PROVIDER` | e.g. `mistral`, `groq` |
 | `TOKENIZER_ID` | Optional Hugging Face tokenizer id for `/tokens` (defaults by provider) |
 | `TAVILY_API_KEY` | Optional; prefer `/tavily` |
+| `MAX_HISTORY_MESSAGES` | Bootstrap only if not set in auth; prefer `/history` |
+| `INPUT_PRICE_PER_MTOK` / `OUTPUT_PRICE_PER_MTOK` | Bootstrap only if not set in auth; prefer `/prices` |
+| `AUTONOMOUS_RISK` | `true`/`1`/`yes` → skip tool permission prompts |
 
-You can also set keys interactively with `/login`, `/provider`, `/model`, and `/tavily` — they are saved in `auth.json` under the data root.
+You can also set keys and app settings interactively with `/login`, `/provider`, `/model`, `/tavily`, `/history`, and `/prices` — they are saved in `auth.json` under the data root.
 
 ## Usage
 
@@ -154,6 +157,8 @@ Task > Search the web for latest Python 3.14 features
 | `/login` | Set Primary/Secondary API key |
 | `/provider` | Switch provider (mistral / groq / custom) |
 | `/model` | Change model for the active provider |
+| `/history` | Set max messages kept in the LLM context window |
+| `/prices` | Set estimated input/output USD price per million tokens |
 | `/tokens` | Count tokens in the current session history |
 | `/tavily` | Set Tavily API key for `web_search` |
 | `/exit` | End the session (`exit` / `quit` also work) |

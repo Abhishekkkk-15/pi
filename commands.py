@@ -21,6 +21,9 @@ class Commands:
         "help": "/help",
         "token": "/tokens",
         "tokenizer": "/tokens",
+        "price": "/prices",
+        "pricing": "/prices",
+        "max_history": "/history",
     }
 
     def __init__(self, agent: Agent) -> None:
@@ -376,6 +379,97 @@ class Commands:
         console.print_system_message(
             f"Model set to '{picked}' for provider '{provider}'.",
             title="Model",
+        )
+        return True
+
+    def history(self) -> bool:
+        """Set max messages kept in the LLM context window"""
+        from config import update_app_settings
+
+        agent = self.agent
+        console = agent.console
+        current = agent.config.max_history_messages
+        console.print_system_message(
+            f"Current MAX_HISTORY_MESSAGES: {current}\n"
+            "This caps how many recent messages are sent to the model each turn.",
+            title="History",
+        )
+        raw = console.prompt_text(
+            "Max history messages (>= 1)",
+            default=str(current),
+        )
+        if raw is None:
+            console.print_system_message("Cancelled.", title="History")
+            return True
+        try:
+            value = int(raw.strip())
+            settings = update_app_settings(max_history_messages=value)
+        except ValueError as e:
+            console.print_error(f"Invalid value: {e}", title="History")
+            return True
+
+        agent.config.apply_app_settings(settings)
+        console.print_system_message(
+            f"Max history messages set to {agent.config.max_history_messages}.\n"
+            "Saved to auth.json (app_settings).",
+            title="History",
+        )
+        return True
+
+    def prices(self) -> bool:
+        """Set estimated input/output USD price per million tokens"""
+        from config import update_app_settings
+
+        agent = self.agent
+        console = agent.console
+        inp = agent.config.input_price_per_mtok
+        out = agent.config.output_price_per_mtok
+
+        INPUT_LABEL = f"Input  ${inp:.4f} / MTok"
+        OUTPUT_LABEL = f"Output ${out:.4f} / MTok"
+        BOTH_LABEL = "Edit both"
+
+        picked = console.interactive_pick(
+            [INPUT_LABEL, OUTPUT_LABEL, BOTH_LABEL],
+            title="Cost estimate rates ($ per million tokens)",
+        )
+        if not picked:
+            console.print_system_message("Cancelled.", title="Prices")
+            return True
+
+        kwargs: Dict[str, float] = {}
+        try:
+            if picked in (INPUT_LABEL, BOTH_LABEL):
+                raw_in = console.prompt_text(
+                    "Input price per MTok (USD)",
+                    default=f"{inp:.4f}",
+                )
+                if raw_in is None:
+                    console.print_system_message("Cancelled.", title="Prices")
+                    return True
+                kwargs["input_price_per_mtok"] = float(raw_in.strip())
+
+            if picked in (OUTPUT_LABEL, BOTH_LABEL):
+                raw_out = console.prompt_text(
+                    "Output price per MTok (USD)",
+                    default=f"{out:.4f}",
+                )
+                if raw_out is None:
+                    console.print_system_message("Cancelled.", title="Prices")
+                    return True
+                kwargs["output_price_per_mtok"] = float(raw_out.strip())
+
+            settings = update_app_settings(**kwargs)
+        except ValueError as e:
+            console.print_error(f"Invalid value: {e}", title="Prices")
+            return True
+
+        agent.config.apply_app_settings(settings)
+        console.print_system_message(
+            f"Input:  ${agent.config.input_price_per_mtok:.4f} / MTok\n"
+            f"Output: ${agent.config.output_price_per_mtok:.4f} / MTok\n"
+            "Saved to auth.json (app_settings). Used for session cost estimates.",
+            title="Prices",
         )
         return True
 

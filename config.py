@@ -344,14 +344,95 @@ def set_tavily_api_key(api_key: str, auth: Optional[dict[str, Any]] = None) -> d
     return data
 
 
+DEFAULT_MAX_HISTORY_MESSAGES = 32
+DEFAULT_INPUT_PRICE_PER_MTOK = 0.50
+DEFAULT_OUTPUT_PRICE_PER_MTOK = 1.50
+
+
+def get_app_settings(auth: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Return normalized app settings (history length + cost rates)."""
+    data = auth if auth is not None else load_auth()
+    raw = data.get("app_settings") if isinstance(data.get("app_settings"), dict) else {}
+
+    max_hist = raw.get("max_history_messages")
+    if max_hist is None:
+        env_hist = os.getenv("MAX_HISTORY_MESSAGES")
+        max_hist = int(env_hist) if env_hist and env_hist.isdigit() else DEFAULT_MAX_HISTORY_MESSAGES
+    try:
+        max_hist = int(max_hist)
+    except (TypeError, ValueError):
+        max_hist = DEFAULT_MAX_HISTORY_MESSAGES
+    max_hist = max(1, max_hist)
+
+    def _price(key: str, env_name: str, default: float) -> float:
+        if key in raw and raw[key] is not None:
+            try:
+                return float(raw[key])
+            except (TypeError, ValueError):
+                pass
+        env_val = os.getenv(env_name)
+        if env_val is not None and str(env_val).strip() != "":
+            try:
+                return float(env_val)
+            except ValueError:
+                pass
+        return default
+
+    return {
+        "max_history_messages": max_hist,
+        "input_price_per_mtok": _price(
+            "input_price_per_mtok", "INPUT_PRICE_PER_MTOK", DEFAULT_INPUT_PRICE_PER_MTOK
+        ),
+        "output_price_per_mtok": _price(
+            "output_price_per_mtok", "OUTPUT_PRICE_PER_MTOK", DEFAULT_OUTPUT_PRICE_PER_MTOK
+        ),
+    }
+
+
+def update_app_settings(
+    *,
+    max_history_messages: Optional[int] = None,
+    input_price_per_mtok: Optional[float] = None,
+    output_price_per_mtok: Optional[float] = None,
+    auth: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Persist one or more app settings into auth.json and return the full settings dict."""
+    data = auth if auth is not None else load_auth()
+    if not isinstance(data, dict):
+        data = {}
+    bucket = data.get("app_settings") if isinstance(data.get("app_settings"), dict) else {}
+
+    if max_history_messages is not None:
+        value = int(max_history_messages)
+        if value < 1:
+            raise ValueError("max_history_messages must be >= 1")
+        bucket["max_history_messages"] = value
+
+    if input_price_per_mtok is not None:
+        value = float(input_price_per_mtok)
+        if value < 0:
+            raise ValueError("input_price_per_mtok must be >= 0")
+        bucket["input_price_per_mtok"] = value
+
+    if output_price_per_mtok is not None:
+        value = float(output_price_per_mtok)
+        if value < 0:
+            raise ValueError("output_price_per_mtok must be >= 0")
+        bucket["output_price_per_mtok"] = value
+
+    data["app_settings"] = bucket
+    save_auth(data)
+    return get_app_settings(data)
+
+
 class Config:
     tavily_api_key: str | None = None
     is_dev: bool = True
     model: str = "mistral-large-latest"
-    max_history_messages: int = 32
+    max_history_messages: int = DEFAULT_MAX_HISTORY_MESSAGES
     autonomous_risk: bool = False
-    input_price_per_mtok: float = 0.50
-    output_price_per_mtok: float = 1.50
+    input_price_per_mtok: float = DEFAULT_INPUT_PRICE_PER_MTOK
+    output_price_per_mtok: float = DEFAULT_OUTPUT_PRICE_PER_MTOK
     api_key: str | None = None
     provider: str = "mistral"
     base_url: str = BUILTIN_PROVIDERS["mistral"]["base_url"]
@@ -381,23 +462,21 @@ class Config:
 
         self.is_dev = is_development()
 
-        max_hist = os.getenv("MAX_HISTORY_MESSAGES")
-        if max_hist and max_hist.isdigit():
-            self.max_history_messages = int(max_hist)
+        app = get_app_settings(auth)
+        self.max_history_messages = int(app["max_history_messages"])
+        self.input_price_per_mtok = float(app["input_price_per_mtok"])
+        self.output_price_per_mtok = float(app["output_price_per_mtok"])
 
         auto_risk = os.getenv("AUTONOMOUS_RISK")
         if auto_risk:
             self.autonomous_risk = auto_risk.lower() in ("true", "1", "yes")
 
-        try:
-            self.input_price_per_mtok = float(os.getenv("INPUT_PRICE_PER_MTOK", "0.50"))
-        except ValueError:
-            self.input_price_per_mtok = 0.50
-
-        try:
-            self.output_price_per_mtok = float(os.getenv("OUTPUT_PRICE_PER_MTOK", "1.50"))
-        except ValueError:
-            self.output_price_per_mtok = 1.50
+    def apply_app_settings(self, settings: Optional[dict[str, Any]] = None) -> None:
+        """Refresh history/cost settings from auth (or a provided settings dict)."""
+        app = settings if settings is not None else get_app_settings()
+        self.max_history_messages = int(app["max_history_messages"])
+        self.input_price_per_mtok = float(app["input_price_per_mtok"])
+        self.output_price_per_mtok = float(app["output_price_per_mtok"])
 
     def reload_from_auth(self) -> None:
         """Refresh provider/model/api_key/base_url from auth.json."""
@@ -411,3 +490,4 @@ class Config:
         self.active_key_index = int(settings.get("active_key_index", 0) or 0)
         self.key_count = int(settings.get("key_count", 0) or 0)
         self.tavily_api_key = get_tavily_api_key(auth) or None
+        self.apply_app_settings(get_app_settings(auth))
