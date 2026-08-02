@@ -157,7 +157,7 @@ Task > Search the web for latest Python 3.14 features
 | `/skills` | Manually pick skills (disables auto skill selection) |
 | `/login` | Set Primary/Secondary API key |
 | `/provider` | Switch provider (mistral / groq / custom) |
-| `/model` | Change model for the active provider |
+| `/model` | Change model (search list or type a custom name) |
 | `/history` | Set max messages kept in the LLM context window |
 | `/prices` | Set estimated input/output USD price per million tokens |
 | `/tokens` | Count tokens in the current session history |

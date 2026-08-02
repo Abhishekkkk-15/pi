@@ -981,69 +981,140 @@ class ConsoleUI:
         title: str = "Select an option",
         current: Optional[str] = None,
         window_size: int = 12,
+        *,
+        searchable: bool = False,
+        custom_option: Optional[str] = None,
     ) -> Optional[str]:
         """
         Arrow-key picker for string options.
         Returns the selected string, or None if cancelled.
+
+        searchable: type to fuzzy-filter the list.
+        custom_option: always-available extra row (e.g. "+ Enter model name...").
         """
         self.stop_loading()
-        if not items:
+        base_items = list(items)
+        if custom_option and custom_option not in base_items:
+            base_items = base_items + [custom_option]
+        if not base_items:
             raise ValueError("No items to select from")
 
-        selected = {"index": 0}
-        if current and current in items:
-            selected["index"] = items.index(current)
+        state = {
+            "index": 0,
+            "query": "",
+        }
+        if current and current in base_items:
+            state["index"] = base_items.index(current)
 
-        def _visible_slice() -> tuple[int, int]:
-            n = len(items)
+        def filtered() -> List[str]:
+            query = state["query"].strip().lower()
+            if not searchable or not query:
+                return list(base_items)
+            scored: list[tuple[int, str]] = []
+            for label in base_items:
+                if custom_option and label == custom_option:
+                    # Keep custom option visible while searching
+                    scored.append((10_000, label))
+                    continue
+                score = _fuzzy_score(query, label)
+                if score is not None:
+                    scored.append((score, label))
+            scored.sort(key=lambda row: (row[0], row[1].lower()))
+            return [label for _, label in scored]
+
+        def _visible_slice(rows: List[str]) -> tuple[int, int]:
+            n = len(rows)
             if n <= window_size:
                 return 0, n
             half = window_size // 2
-            start = max(0, selected["index"] - half)
+            start = max(0, state["index"] - half)
             end = min(n, start + window_size)
             start = max(0, end - window_size)
             return start, end
 
         def get_text() -> FormattedText:
+            rows = filtered()
+            if rows:
+                state["index"] %= len(rows)
+            else:
+                state["index"] = 0
+
+            hints = "up/down move  enter select  esc cancel"
+            if searchable:
+                hints = "type to search  " + hints
             fragments: list[tuple[str, str]] = [
                 ("class:title", f"{title}\n"),
-                ("class:muted", "up/down move  enter select  esc cancel\n\n"),
+                ("class:muted", f"{hints}\n"),
             ]
-            start, end = _visible_slice()
+            if searchable:
+                fragments.append(("class:prompt", f"{GLYPH['prompt']} "))
+                fragments.append(("class:query", f"{state['query']}\n"))
+            fragments.append(("", "\n"))
+
+            if not rows:
+                fragments.append(("class:muted", "  no matches — try another search\n"))
+                return FormattedText(fragments)
+
+            start, end = _visible_slice(rows)
             if start > 0:
                 fragments.append(("class:muted", f"  ... {start} more above\n"))
             for i in range(start, end):
-                marker = GLYPH["prompt"] if i == selected["index"] else " "
-                label = items[i]
+                marker = GLYPH["prompt"] if i == state["index"] else " "
+                label = rows[i]
                 suffix = "  (current)" if current and label == current else ""
-                style = "class:selected" if i == selected["index"] else ""
+                style = "class:selected" if i == state["index"] else ""
                 fragments.append((style, f"{marker} {label}{suffix}\n"))
-            if end < len(items):
-                fragments.append(("class:muted", f"  ... {len(items) - end} more below\n"))
+            if end < len(rows):
+                fragments.append(("class:muted", f"  ... {len(rows) - end} more below\n"))
             return FormattedText(fragments)
 
         kb = KeyBindings()
 
         @kb.add("up")
         def _up(event) -> None:
-            selected["index"] = (selected["index"] - 1) % len(items)
+            rows = filtered()
+            if rows:
+                state["index"] = (state["index"] - 1) % len(rows)
 
         @kb.add("down")
         def _down(event) -> None:
-            selected["index"] = (selected["index"] + 1) % len(items)
+            rows = filtered()
+            if rows:
+                state["index"] = (state["index"] + 1) % len(rows)
 
         @kb.add("enter")
         def _enter(event) -> None:
-            event.app.exit(result=items[selected["index"]])
+            rows = filtered()
+            event.app.exit(result=rows[state["index"]] if rows else None)
 
         @kb.add("escape")
         def _esc(event) -> None:
             event.app.exit(result=None)
 
+        if searchable:
+            @kb.add("backspace")
+            def _backspace(event) -> None:
+                state["query"] = state["query"][:-1]
+                state["index"] = 0
+
+            @kb.add("c-u")
+            def _clear(event) -> None:
+                state["query"] = ""
+                state["index"] = 0
+
+            @kb.add(Keys.Any)
+            def _typed(event) -> None:
+                char = event.data
+                if char and char.isprintable():
+                    state["query"] += char
+                    state["index"] = 0
+
         style = PtStyle.from_dict({
             "title": f"bold {ACCENT}",
             "selected": f"bold {ACCENT}",
             "muted": f"italic {SUBTLE}",
+            "prompt": f"bold {ACCENT}",
+            "query": INK,
         })
 
         try:
@@ -1055,9 +1126,9 @@ class ConsoleUI:
             )
             return app.run()
         except Exception:
-            # Numeric fallback
+            # Numeric / text fallback
             self._emit(Text(title, style=f"bold {ACCENT}"), gap_before=True)
-            for i, item in enumerate(items, 1):
+            for i, item in enumerate(base_items, 1):
                 mark = "  (current)" if current and item == current else ""
                 self._emit(
                     self._gutter(f"{i}.", ACCENT, Text(f"{item}{mark}", style=INK))
@@ -1066,13 +1137,39 @@ class ConsoleUI:
                 try:
                     from rich.prompt import Prompt
 
-                    choice = Prompt.ask("Enter number (or blank to cancel)", console=self.console, default="")
+                    hint = "number"
+                    if searchable:
+                        hint = "number or search text"
+                    if custom_option:
+                        hint += f", or '{len(base_items)}' for custom"
+                    choice = Prompt.ask(
+                        f"Enter {hint} (blank to cancel)",
+                        console=self.console,
+                        default="",
+                    )
                     if not choice.strip():
                         return None
-                    idx = int(choice) - 1
-                    if 0 <= idx < len(items):
-                        return items[idx]
-                    self.print_error(f"Choose 1-{len(items)}.")
+                    if choice.strip().isdigit():
+                        idx = int(choice.strip()) - 1
+                        if 0 <= idx < len(base_items):
+                            return base_items[idx]
+                        self.print_error(f"Choose 1-{len(base_items)}.")
+                        continue
+                    # Treat as search: pick best fuzzy match, or custom if requested
+                    query = choice.strip().lower()
+                    if custom_option and query in ("custom", "manual", "other"):
+                        return custom_option
+                    scored = []
+                    for label in base_items:
+                        if custom_option and label == custom_option:
+                            continue
+                        score = _fuzzy_score(query, label)
+                        if score is not None:
+                            scored.append((score, label))
+                    if scored:
+                        scored.sort(key=lambda row: (row[0], row[1].lower()))
+                        return scored[0][1]
+                    self.print_error("No match. Enter a number or clearer search text.")
                 except ValueError:
                     self.print_error("Please enter a valid number.")
 

@@ -396,12 +396,13 @@ class Commands:
         return True
 
     def model(self) -> bool:
-        """Change model for the active provider"""
+        """Change model for the active provider (search or type a custom name)"""
         from config import upsert_provider_settings, get_provider_settings
 
         agent = self.agent
         console = agent.console
         provider = agent.config.provider
+        CUSTOM = "+ Enter model name manually..."
 
         if not agent.config.api_key:
             console.print_error(
@@ -420,26 +421,43 @@ class Commands:
             f"Fetching models from {provider} ({agent.config.base_url})...",
             title="Model",
         )
+        models: list[str] = []
         try:
             models = agent.list_available_models()
         except Exception as e:
-            console.print_error(f"Failed to list models: {e}", title="Model")
-            return True
-
-        if not models:
-            console.print_error("Provider returned no models.", title="Model")
-            return True
+            console.print_error(
+                f"Failed to list models: {e}\nYou can still enter a model name manually.",
+                title="Model",
+            )
 
         current = str(agent.config.model)
-        picked = console.interactive_pick(
-            models,
-            title=f"Select model ({provider}) — {len(models)} available",
-            current=current if current in models else None,
-        )
-        if not picked:
-            console.print_system_message("Model selection cancelled.", title="Model")
-            return True
+        if not models:
+            console.print_system_message(
+                "No models listed by the provider — enter a model id manually.",
+                title="Model",
+            )
+            picked = console.prompt_text("Model name", default=current or "")
+            if not picked:
+                console.print_system_message("Model selection cancelled.", title="Model")
+                return True
+        else:
+            picked = console.interactive_pick(
+                models,
+                title=f"Select model ({provider}) — {len(models)} available",
+                current=current if current in models else None,
+                searchable=True,
+                custom_option=CUSTOM,
+            )
+            if not picked:
+                console.print_system_message("Model selection cancelled.", title="Model")
+                return True
+            if picked == CUSTOM:
+                picked = console.prompt_text("Model name", default=current or "")
+                if not picked:
+                    console.print_system_message("Model selection cancelled.", title="Model")
+                    return True
 
+        picked = picked.strip()
         upsert_provider_settings(provider, model=picked, make_active=True)
         agent.config.model = picked
         console.print_system_message(
