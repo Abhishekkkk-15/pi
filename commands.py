@@ -107,6 +107,35 @@ class Commands:
         )
         return True
 
+    def new(self) -> bool:
+        """Start a new conversation session without quitting"""
+        agent = self.agent
+        console = agent.console
+        had_session = agent.memory.session is not None
+        prev_title = (
+            agent.memory.session.title if agent.memory.session else None
+        )
+
+        agent.reset_conversation()
+        console._session_title = " "
+        console._session_workspace = ""
+        console._last_assistant_message = ""
+        console.clear_screen()
+        console.print_welcome(
+            is_auth=agent.config.api_key,
+            provider=agent.config.provider,
+            model=str(agent.config.model),
+        )
+        if had_session:
+            note = f"Previous session left as-is"
+            if prev_title:
+                note += f" ({prev_title})"
+            note += ".\nNew session ready — send a task to begin."
+        else:
+            note = "New session ready — send a task to begin."
+        console.print_system_message(note, title="New")
+        return True
+
     def quiet(self) -> bool:
         """Collapse tool output to one-liners"""
         console = self.agent.console

@@ -202,6 +202,7 @@ else:
 COMMAND_HINTS: dict[str, str] = {
     "/help": "Show help",
     "/clear": "Clear the screen",
+    "/new": "Start a new conversation session",
     "/quiet": "Collapse tool output to one-liners",
     "/verbose": "Show full tool output",
     "/copy": "Copy last assistant reply",

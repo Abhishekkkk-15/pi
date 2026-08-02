@@ -150,6 +150,7 @@ Task > Search the web for latest Python 3.14 features
 |---------|-------------|
 | `/help` | Show help |
 | `/clear` | Clear the screen |
+| `/new` | Start a new conversation session |
 | `/quiet` | Collapse tool output |
 | `/verbose` | Show full tool output |
 | `/copy` | Copy last assistant reply |

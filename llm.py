@@ -118,6 +118,21 @@ class Agent:
         # None = auto skill selection via LLM; list = manual (/skills), skip LLM picker
         self.manual_skill_names: Optional[list[str]] = None
 
+    def reset_conversation(self) -> None:
+        """Drop the active session and start a fresh in-memory conversation."""
+        self.memory.session = None
+        if hasattr(self, "current_session"):
+            self.current_session = None  # type: ignore[attr-defined]
+        self._pending_prompt_tokens = 0
+        self._pending_completion_tokens = 0
+        self._pending_total_tokens = 0
+        self.memory.messages = [
+            Message(role=Role.SYSTEM, content=self.prompt.raw_system_prompt)
+        ]
+        # Keep manual skill preference across /new; re-apply into the fresh system prompt
+        if self.manual_skill_names:
+            self.apply_active_skills(list(self.manual_skill_names), announce=False)
+
     def apply_active_skills(self, skill_names: list[str], *, announce: bool = True) -> None:
         """Load skills into the system prompt (or reset to base when empty)."""
         if skill_names:
