@@ -154,6 +154,7 @@ Task > Search the web for latest Python 3.14 features
 | `/verbose` | Show full tool output |
 | `/copy` | Copy last assistant reply |
 | `/resume` | Resume a previous session |
+| `/skills` | Manually pick skills (disables auto skill selection) |
 | `/login` | Set Primary/Secondary API key |
 | `/provider` | Switch provider (mistral / groq / custom) |
 | `/model` | Change model for the active provider |

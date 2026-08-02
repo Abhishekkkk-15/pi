@@ -161,6 +161,72 @@ class Commands:
         agent.console.print_system_message(f"Resumed session: {selected_session.title}")
         return True
 
+    def skills(self) -> bool:
+        """Manually pick skills for this session (skips auto skill selection)"""
+        from skills import Skills
+
+        agent = self.agent
+        console = agent.console
+        Skills.refresh()
+        names = Skills.names()
+        if not names:
+            console.print_system_message(
+                "No skills found.\n"
+                "Looked in:\n  "
+                + "\n  ".join(str(p) for p in Skills.search_dirs()),
+                title="Skills",
+            )
+            return True
+
+        if agent.manual_skill_names is None:
+            mode_note = "Mode: auto (agent picks each turn)"
+            preselected: list[str] = []
+        else:
+            mode_note = f"Mode: manual ({len(agent.manual_skill_names)} selected)"
+            preselected = list(agent.manual_skill_names)
+
+        console.print_system_message(
+            f"{mode_note}\n"
+            f"Available: {len(names)} skill(s) in this workspace.",
+            title="Skills",
+        )
+
+        result = console.interactive_multi_pick(
+            names,
+            title="Select skills (space to toggle)",
+            preselected=preselected,
+        )
+        if result is None:
+            console.print_system_message("Skills selection cancelled.", title="Skills")
+            return True
+
+        mode, selected = result
+        if mode == "auto":
+            agent.manual_skill_names = None
+            # Reset system prompt to base; auto picker will inject next turn
+            agent.apply_active_skills([], announce=False)
+            console.print_system_message(
+                "Skill mode: auto — agent will pick skills each turn.",
+                title="Skills",
+            )
+            return True
+
+        agent.manual_skill_names = selected
+        agent.apply_active_skills(selected, announce=False)
+        if selected:
+            console.print_system_message(
+                "Skill mode: manual — auto selection disabled.\n"
+                f"Active: {', '.join(selected)}",
+                title="Skills",
+            )
+        else:
+            console.print_system_message(
+                "Skill mode: manual — no skills selected.\n"
+                "Auto selection is disabled until you press 'a' in /skills.",
+                title="Skills",
+            )
+        return True
+
     def login(self) -> bool:
         """Set Primary/Secondary API key (supports rate-limit failover)"""
         from config import get_provider_settings, set_provider_key

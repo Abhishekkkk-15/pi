@@ -115,6 +115,36 @@ class Agent:
         self._pending_prompt_tokens = 0
         self._pending_completion_tokens = 0
         self._pending_total_tokens = 0
+        # None = auto skill selection via LLM; list = manual (/skills), skip LLM picker
+        self.manual_skill_names: Optional[list[str]] = None
+
+    def apply_active_skills(self, skill_names: list[str], *, announce: bool = True) -> None:
+        """Load skills into the system prompt (or reset to base when empty)."""
+        if skill_names:
+            active_skills = Skills.load_many(skill_names)
+            sys_prompt = self.prompt.get_system_prompt(active_skills)
+        else:
+            sys_prompt = self.prompt.raw_system_prompt
+
+        if self.memory.messages and self.memory.messages[0].role == Role.SYSTEM:
+            self.memory.messages[0].content = sys_prompt
+            if self.memory.session:
+                self.memory.write_to_jsonl(
+                    self.memory.session.history_path,
+                    self.memory.messages,
+                    mode="w",
+                )
+
+        if announce:
+            if skill_names:
+                self.console.console.print(
+                    f"[bold cyan]Active Skills:[/bold cyan] "
+                    f"[yellow]{', '.join(skill_names)}[/yellow]"
+                )
+            else:
+                self.console.console.print(
+                    "[dim]No skills loaded into the system prompt.[/dim]"
+                )
 
     def _persist_session_usage(self) -> None:
         session = self.memory.session
@@ -387,26 +417,25 @@ class Agent:
     def chat(self, user_query: str) -> Optional[Any]:
         interrupt_controller.start()
         try:
-            # Evaluate and load relevant skills from .skills
+            # Skills: manual (/skills) skips the LLM skill-selection call
             available_skills = Skills.names()
             if available_skills:
                 interrupt_controller.check()
-                selected_names = self.select_relevant_skills(user_query)
+                if self.manual_skill_names is not None:
+                    selected_names = [
+                        n for n in self.manual_skill_names if n in available_skills
+                    ]
+                else:
+                    selected_names = self.select_relevant_skills(user_query)
                 if selected_names:
-                    active_skills = Skills.load_many(selected_names)
-                    sys_prompt = self.prompt.get_system_prompt(active_skills)
-                    if self.memory.messages and self.memory.messages[0].role == Role.SYSTEM:
-                        self.memory.messages[0].content = sys_prompt
-                        if self.memory and self.memory.session:
-                            self.memory.write_to_jsonl(
-                                self.memory.session.history_path,
-                                self.memory.messages,
-                                mode="w",
-                            )
-                    self.console.console.print(
-                        f"[bold cyan]🎯 Active Skills Loaded:[/bold cyan] "
-                        f"[yellow]{', '.join(selected_names)}[/yellow]"
+                    # Auto mode: announce each turn; manual already announced in /skills
+                    self.apply_active_skills(
+                        selected_names,
+                        announce=self.manual_skill_names is None,
                     )
+                elif self.manual_skill_names is not None:
+                    # Manual mode with empty selection: ensure base system prompt
+                    self.apply_active_skills([], announce=False)
 
             user_msg = Message(role=Role.USER, content=user_query)
             self._append_message(user_msg)

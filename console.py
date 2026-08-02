@@ -206,6 +206,7 @@ COMMAND_HINTS: dict[str, str] = {
     "/verbose": "Show full tool output",
     "/copy": "Copy last assistant reply",
     "/resume": "Resume a previous session",
+    "/skills": "Manually pick skills (skips auto selection)",
     "/login": "Set Primary/Secondary API key",
     "/tavily": "Set Tavily API key for web_search",
     "/provider": "Change LLM provider",
@@ -1074,6 +1075,154 @@ class ConsoleUI:
                     self.print_error(f"Choose 1-{len(items)}.")
                 except ValueError:
                     self.print_error("Please enter a valid number.")
+
+    def interactive_multi_pick(
+        self,
+        items: List[str],
+        title: str = "Select options",
+        preselected: Optional[List[str]] = None,
+        window_size: int = 14,
+    ) -> Optional[tuple[str, List[str]]]:
+        """
+        Multi-select picker.
+
+        Returns:
+          None — cancelled
+          ("auto", []) — user chose auto mode
+          ("manual", [...]) — confirmed selection (may be empty = no skills)
+        """
+        self.stop_loading()
+        if not items:
+            raise ValueError("No items to select from")
+
+        selected = {"index": 0}
+        checked: set[str] = set(preselected or []) & set(items)
+        outcome: dict[str, Any] = {"mode": "manual"}
+
+        def _visible_slice() -> tuple[int, int]:
+            n = len(items)
+            if n <= window_size:
+                return 0, n
+            half = window_size // 2
+            start = max(0, selected["index"] - half)
+            end = min(n, start + window_size)
+            start = max(0, end - window_size)
+            return start, end
+
+        def get_text() -> FormattedText:
+            fragments: list[tuple[str, str]] = [
+                ("class:title", f"{title}\n"),
+                (
+                    "class:muted",
+                    "up/down move  space toggle  enter confirm  "
+                    "c clear all  a auto mode  esc cancel\n"
+                    f"selected: {len(checked)}\n\n",
+                ),
+            ]
+            start, end = _visible_slice()
+            if start > 0:
+                fragments.append(("class:muted", f"  ... {start} more above\n"))
+            for i in range(start, end):
+                name = items[i]
+                cursor = GLYPH["prompt"] if i == selected["index"] else " "
+                mark = "[x]" if name in checked else "[ ]"
+                style = "class:selected" if i == selected["index"] else ""
+                fragments.append((style, f"{cursor} {mark} {name}\n"))
+            if end < len(items):
+                fragments.append(("class:muted", f"  ... {len(items) - end} more below\n"))
+            return FormattedText(fragments)
+
+        kb = KeyBindings()
+
+        @kb.add("up")
+        def _up(event) -> None:
+            selected["index"] = (selected["index"] - 1) % len(items)
+
+        @kb.add("down")
+        def _down(event) -> None:
+            selected["index"] = (selected["index"] + 1) % len(items)
+
+        @kb.add("space")
+        def _toggle(event) -> None:
+            name = items[selected["index"]]
+            if name in checked:
+                checked.discard(name)
+            else:
+                checked.add(name)
+
+        @kb.add("c")
+        @kb.add("C")
+        def _clear(event) -> None:
+            checked.clear()
+
+        @kb.add("a")
+        @kb.add("A")
+        def _auto(event) -> None:
+            outcome["mode"] = "auto"
+            event.app.exit(result=[])
+
+        @kb.add("enter")
+        def _enter(event) -> None:
+            outcome["mode"] = "manual"
+            event.app.exit(result=[name for name in items if name in checked])
+
+        @kb.add("escape")
+        def _esc(event) -> None:
+            event.app.exit(result=None)
+
+        style = PtStyle.from_dict({
+            "title": f"bold {ACCENT}",
+            "selected": f"bold {ACCENT}",
+            "muted": f"italic {SUBTLE}",
+        })
+
+        try:
+            app: Application[Optional[List[str]]] = Application(
+                layout=Layout(Window(FormattedTextControl(get_text), always_hide_cursor=True)),
+                key_bindings=kb,
+                style=style,
+                full_screen=False,
+            )
+            picked = app.run()
+            if picked is None:
+                return None
+            if outcome["mode"] == "auto":
+                return ("auto", [])
+            return ("manual", picked)
+        except Exception:
+            self._emit(Text(title, style=f"bold {ACCENT}"), gap_before=True)
+            for i, item in enumerate(items, 1):
+                mark = "x" if item in checked else " "
+                self._emit(
+                    self._gutter(f"{i}.", ACCENT, Text(f"[{mark}] {item}", style=INK))
+                )
+            self._emit(
+                Text(
+                    "Enter numbers (e.g. 1,3,5), 'a' for auto, or blank to cancel",
+                    style="dim",
+                )
+            )
+            while True:
+                try:
+                    from rich.prompt import Prompt
+
+                    choice = Prompt.ask("Skills", console=self.console, default="").strip()
+                    if not choice:
+                        return None
+                    if choice.lower() == "a":
+                        return ("auto", [])
+                    indices = []
+                    for part in choice.replace(",", " ").split():
+                        indices.append(int(part) - 1)
+                    picked_names: List[str] = []
+                    for idx in indices:
+                        if not (0 <= idx < len(items)):
+                            raise ValueError(idx)
+                        if items[idx] not in picked_names:
+                            picked_names.append(items[idx])
+                    return ("manual", picked_names)
+                except ValueError:
+                    self.print_error(f"Enter valid numbers between 1 and {len(items)}.")
 
     def prompt_text(self, label: str, default: str = "") -> Optional[str]:
         """Prompt for a single line of text. Returns None on cancel/empty when no default."""
