@@ -347,10 +347,12 @@ def set_tavily_api_key(api_key: str, auth: Optional[dict[str, Any]] = None) -> d
 DEFAULT_MAX_HISTORY_MESSAGES = 32
 DEFAULT_INPUT_PRICE_PER_MTOK = 0.50
 DEFAULT_OUTPUT_PRICE_PER_MTOK = 1.50
+DEFAULT_COMPACT_AT_TOKENS = 20_000
+DEFAULT_COMPACT_KEEP_MESSAGES = 16
 
 
 def get_app_settings(auth: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """Return normalized app settings (history length + cost rates)."""
+    """Return normalized app settings (history length + cost rates + compaction)."""
     data = auth if auth is not None else load_auth()
     raw = data.get("app_settings") if isinstance(data.get("app_settings"), dict) else {}
 
@@ -378,6 +380,24 @@ def get_app_settings(auth: Optional[dict[str, Any]] = None) -> dict[str, Any]:
                 pass
         return default
 
+    def _int(key: str, env_name: str, default: int, minimum: int = 1) -> int:
+        if key in raw and raw[key] is not None:
+            try:
+                return max(minimum, int(raw[key]))
+            except (TypeError, ValueError):
+                pass
+        env_val = os.getenv(env_name)
+        if env_val is not None and str(env_val).strip().lstrip("-").isdigit():
+            return max(minimum, int(env_val))
+        return default
+
+    compact_enabled = raw.get("compaction_enabled")
+    if compact_enabled is None:
+        env_flag = (os.getenv("COMPACTION_ENABLED") or "true").strip().lower()
+        compact_enabled = env_flag in ("true", "1", "yes")
+    else:
+        compact_enabled = bool(compact_enabled)
+
     return {
         "max_history_messages": max_hist,
         "input_price_per_mtok": _price(
@@ -385,6 +405,16 @@ def get_app_settings(auth: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         ),
         "output_price_per_mtok": _price(
             "output_price_per_mtok", "OUTPUT_PRICE_PER_MTOK", DEFAULT_OUTPUT_PRICE_PER_MTOK
+        ),
+        "compaction_enabled": compact_enabled,
+        "compact_at_tokens": _int(
+            "compact_at_tokens", "COMPACT_AT_TOKENS", DEFAULT_COMPACT_AT_TOKENS, minimum=1000
+        ),
+        "compact_keep_messages": _int(
+            "compact_keep_messages",
+            "COMPACT_KEEP_MESSAGES",
+            DEFAULT_COMPACT_KEEP_MESSAGES,
+            minimum=2,
         ),
     }
 
@@ -394,6 +424,9 @@ def update_app_settings(
     max_history_messages: Optional[int] = None,
     input_price_per_mtok: Optional[float] = None,
     output_price_per_mtok: Optional[float] = None,
+    compaction_enabled: Optional[bool] = None,
+    compact_at_tokens: Optional[int] = None,
+    compact_keep_messages: Optional[int] = None,
     auth: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Persist one or more app settings into auth.json and return the full settings dict."""
@@ -420,6 +453,21 @@ def update_app_settings(
             raise ValueError("output_price_per_mtok must be >= 0")
         bucket["output_price_per_mtok"] = value
 
+    if compaction_enabled is not None:
+        bucket["compaction_enabled"] = bool(compaction_enabled)
+
+    if compact_at_tokens is not None:
+        value = int(compact_at_tokens)
+        if value < 1000:
+            raise ValueError("compact_at_tokens must be >= 1000")
+        bucket["compact_at_tokens"] = value
+
+    if compact_keep_messages is not None:
+        value = int(compact_keep_messages)
+        if value < 2:
+            raise ValueError("compact_keep_messages must be >= 2")
+        bucket["compact_keep_messages"] = value
+
     data["app_settings"] = bucket
     save_auth(data)
     return get_app_settings(data)
@@ -433,6 +481,9 @@ class Config:
     autonomous_risk: bool = False
     input_price_per_mtok: float = DEFAULT_INPUT_PRICE_PER_MTOK
     output_price_per_mtok: float = DEFAULT_OUTPUT_PRICE_PER_MTOK
+    compaction_enabled: bool = True
+    compact_at_tokens: int = DEFAULT_COMPACT_AT_TOKENS
+    compact_keep_messages: int = DEFAULT_COMPACT_KEEP_MESSAGES
     api_key: str | None = None
     provider: str = "mistral"
     base_url: str = BUILTIN_PROVIDERS["mistral"]["base_url"]
@@ -466,17 +517,23 @@ class Config:
         self.max_history_messages = int(app["max_history_messages"])
         self.input_price_per_mtok = float(app["input_price_per_mtok"])
         self.output_price_per_mtok = float(app["output_price_per_mtok"])
+        self.compaction_enabled = bool(app["compaction_enabled"])
+        self.compact_at_tokens = int(app["compact_at_tokens"])
+        self.compact_keep_messages = int(app["compact_keep_messages"])
 
         auto_risk = os.getenv("AUTONOMOUS_RISK")
         if auto_risk:
             self.autonomous_risk = auto_risk.lower() in ("true", "1", "yes")
 
     def apply_app_settings(self, settings: Optional[dict[str, Any]] = None) -> None:
-        """Refresh history/cost settings from auth (or a provided settings dict)."""
+        """Refresh history/cost/compaction settings from auth (or a provided settings dict)."""
         app = settings if settings is not None else get_app_settings()
         self.max_history_messages = int(app["max_history_messages"])
         self.input_price_per_mtok = float(app["input_price_per_mtok"])
         self.output_price_per_mtok = float(app["output_price_per_mtok"])
+        self.compaction_enabled = bool(app["compaction_enabled"])
+        self.compact_at_tokens = int(app["compact_at_tokens"])
+        self.compact_keep_messages = int(app["compact_keep_messages"])
 
     def reload_from_auth(self) -> None:
         """Refresh provider/model/api_key/base_url from auth.json."""

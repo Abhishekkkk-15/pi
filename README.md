@@ -115,10 +115,13 @@ Only these directories are scanned, so stray markdown elsewhere in your project 
 | `TOKENIZER_ID` | Optional Hugging Face tokenizer id for `/tokens` (defaults by provider) |
 | `TAVILY_API_KEY` | Optional; prefer `/tavily` |
 | `MAX_HISTORY_MESSAGES` | Bootstrap only if not set in auth; prefer `/history` |
+| `COMPACTION_ENABLED` | Bootstrap only if not set in auth; prefer `/compaction` |
+| `COMPACT_AT_TOKENS` | Bootstrap only if not set in auth; prefer `/compaction` |
+| `COMPACT_KEEP_MESSAGES` | Bootstrap only if not set in auth; prefer `/compaction` |
 | `INPUT_PRICE_PER_MTOK` / `OUTPUT_PRICE_PER_MTOK` | Bootstrap only if not set in auth; prefer `/prices` |
 | `AUTONOMOUS_RISK` | `true`/`1`/`yes` → skip tool permission prompts |
 
-You can also set keys and app settings interactively with `/login`, `/provider`, `/model`, `/tavily`, `/history`, and `/prices` — they are saved in `auth.json` under the data root.
+You can also set keys and app settings interactively with `/login`, `/provider`, `/model`, `/tavily`, `/history`, `/compaction`, and `/prices` — they are saved in `auth.json` under the data root.
 
 ## Usage
 
@@ -160,6 +163,8 @@ Task > Search the web for latest Python 3.14 features
 | `/provider` | Switch provider (mistral / groq / custom) |
 | `/model` | Change model (search list or type a custom name) |
 | `/history` | Set max messages kept in the LLM context window |
+| `/compaction` | Configure compaction (enabled / threshold / keep recent) |
+| `/compact` | Run compaction now (manual, ignores threshold) |
 | `/prices` | Set estimated input/output USD price per million tokens |
 | `/tokens` | Count tokens in the current session history |
 | `/tavily` | Set Tavily API key for `web_search` |

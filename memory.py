@@ -121,6 +121,8 @@ class Memory:
                         completion_tokens=int(data.get("completion_tokens", 0) or 0),
                         total_tokens=int(data.get("total_tokens", 0) or 0),
                         estimated_cost_usd=float(data.get("estimated_cost_usd", 0.0) or 0.0),
+                        compaction_summary=str(data.get("compaction_summary", "") or ""),
+                        compacted_until=int(data.get("compacted_until", 0) or 0),
                     )
                     sessions.append(session)
             except (json.JSONDecodeError, KeyError, OSError):

@@ -213,6 +213,8 @@ COMMAND_HINTS: dict[str, str] = {
     "/provider": "Change LLM provider",
     "/model": "Change model for active provider",
     "/history": "Set max messages kept in context",
+    "/compaction": "Configure context compaction",
+    "/compact": "Run compaction now (manual)",
     "/prices": "Set token price estimates",
     "/tokens": "Count tokens in session history",
     "/theme": "Change the color theme",

@@ -17,6 +17,7 @@ from skills import Skills
 from permissions import PermissionManager, PermissionDecision
 from typing import Any, Optional
 from interrupt import AgentInterrupted, interrupt_controller
+from compaction import Compaction
 
 
 def sanitize_api_messages(raw_messages: list[dict]) -> list[dict]:
@@ -296,6 +297,87 @@ class Agent:
         if self.memory and self.memory.session:
             self.memory.write_to_jsonl(self.memory.session.history_path, [msg], mode="a")
 
+    def _compaction(self) -> Compaction:
+        return Compaction(
+            compact_at_tokens=self.config.compact_at_tokens,
+            keep_messages=self.config.compact_keep_messages,
+            provider=self.config.provider,
+        )
+
+    def _build_api_messages(self) -> list[dict]:
+        """System + optional summary + recent raw messages, then sliding window."""
+        comp = self._compaction()
+        working = comp.working_messages(self.memory.messages, self.memory.session)
+        raw_dicts = [m.to_dict() for m in working]
+        return apply_sliding_window(
+            raw_dicts, max_history=self.config.max_history_messages
+        )
+
+    def _maybe_compact(self) -> None:
+        """Auto path: only runs when enabled and over threshold."""
+        self.run_compaction(force=False)
+
+    def run_compaction(self, *, force: bool = False) -> str:
+        """
+        Summarize newly aged messages into session.compaction_summary.
+
+        force=True: run even if under threshold / auto-disabled (manual /compact).
+        Returns a short status string for the caller to show.
+        """
+        session = self.memory.session
+        if not session:
+            return "No active session. Send a task first (or /resume)."
+
+        if not force and not self.config.compaction_enabled:
+            return "Compaction is disabled. Enable it with /compaction or pass force."
+
+        comp = self._compaction()
+        if not force and not comp.should_compact(self.memory.messages, session):
+            return "Below threshold — nothing to compact."
+
+        planned = comp.plan_segment(self.memory.messages, session)
+        if not planned:
+            return (
+                "Nothing new to fold — recent messages already cover the keep window "
+                f"(keep={self.config.compact_keep_messages})."
+            )
+        segment, new_until = planned
+
+        interrupt_controller.check()
+        self.console.console.print(
+            "[dim]Compacting older context "
+            f"({len(segment)} message(s) → summary)...[/dim]"
+        )
+        prompt = comp.build_prompt(session.compaction_summary, segment)
+        try:
+            response = self._create_completion(
+                messages=[{"role": "user", "content": prompt}],
+                use_tools=False,
+            )
+            self._record_usage(response)
+            summary = (response.choices[0].message.content or "").strip()
+        except AgentInterrupted:
+            raise
+        except Exception as e:
+            self.console.print_error(
+                f"Compaction failed: {e}",
+                title="Compaction",
+            )
+            return f"Compaction failed: {e}"
+
+        if not summary:
+            return "Summarizer returned empty text — left context unchanged."
+
+        session.compaction_summary = summary
+        session.compacted_until = new_until
+        self._persist_session_usage()
+        msg = (
+            f"Compacted through message {new_until} "
+            f"({len(segment)} folded; prior summary included)."
+        )
+        self.console.console.print(f"[dim]{msg}[/dim]")
+        return msg
+
     def _record_error(self, error: BaseException, title: str = "LLM Error") -> Message:
         """Show an error in the console and persist it to conversation history."""
         detail = f"{type(error).__name__}: {error}"
@@ -457,10 +539,8 @@ class Agent:
 
             while True:
                 interrupt_controller.check()
-                raw_dicts = [f.to_dict() for f in self.memory.messages]
-                api_messages = apply_sliding_window(
-                    raw_dicts, max_history=self.config.max_history_messages
-                )
+                self._maybe_compact()
+                api_messages = self._build_api_messages()
 
                 try:
                     res = self._create_completion(api_messages, use_tools=True)

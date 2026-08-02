@@ -529,6 +529,132 @@ class Commands:
         )
         return True
 
+    def compact(self) -> bool:
+        """Run compaction now (manual), even if under the auto threshold"""
+        agent = self.agent
+        console = agent.console
+        if not agent.config.api_key:
+            console.print_error(
+                "No API key configured. Run /login first.",
+                title="Compact",
+            )
+            return True
+        if not agent.memory.session:
+            console.print_system_message(
+                "No active session yet. Send a task (or /resume) first.",
+                title="Compact",
+            )
+            return True
+
+        session = agent.memory.session
+        console.print_system_message(
+            f"Manual compaction\n"
+            f"Keep raw: last {agent.config.compact_keep_messages} messages\n"
+            f"Already compacted until index: {session.compacted_until}\n"
+            f"Has prior summary: {'yes' if session.compaction_summary else 'no'}",
+            title="Compact",
+        )
+        try:
+            status = agent.run_compaction(force=True)
+        except Exception as e:
+            console.print_error(str(e), title="Compact")
+            return True
+
+        console.print_system_message(status, title="Compact")
+        if session.compaction_summary:
+            preview = session.compaction_summary.strip().replace("\n", " ")
+            if len(preview) > 240:
+                preview = preview[:237] + "..."
+            console.print_system_message(
+                f"Summary preview:\n{preview}",
+                title="Compact",
+            )
+        return True
+
+    def compaction(self) -> bool:
+        """Configure compaction (enabled, token threshold, keep recent messages)"""
+        from config import update_app_settings
+
+        agent = self.agent
+        console = agent.console
+        enabled = agent.config.compaction_enabled
+        at_tokens = agent.config.compact_at_tokens
+        keep = agent.config.compact_keep_messages
+
+        RUN_LABEL = "Run compaction now"
+        ENABLED_LABEL = f"Enabled  {'on' if enabled else 'off'}"
+        TOKENS_LABEL = f"Compact at tokens  {at_tokens:,}"
+        KEEP_LABEL = f"Keep recent messages  {keep}"
+
+        console.print_system_message(
+            f"Compaction summarizes older turns when context is large.\n"
+            f"Enabled: {enabled}\n"
+            f"Threshold: {at_tokens:,} tokens\n"
+            f"Keep raw: last {keep} messages\n"
+            "Full history stays on disk; only the model context is compacted.\n"
+            "Tip: /compact forces a run immediately.",
+            title="Compaction",
+        )
+
+        picked = console.interactive_pick(
+            [RUN_LABEL, ENABLED_LABEL, TOKENS_LABEL, KEEP_LABEL],
+            title="Compaction",
+        )
+        if not picked:
+            console.print_system_message("Cancelled.", title="Compaction")
+            return True
+
+        if picked == RUN_LABEL:
+            return self.compact()
+
+        kwargs: Dict[str, Any] = {}
+        try:
+            if picked == ENABLED_LABEL:
+                choice = console.interactive_pick(
+                    ["on", "off"],
+                    title="Compaction enabled",
+                    current="on" if enabled else "off",
+                )
+                if not choice:
+                    console.print_system_message("Cancelled.", title="Compaction")
+                    return True
+                kwargs["compaction_enabled"] = choice == "on"
+
+            elif picked == TOKENS_LABEL:
+                raw = console.prompt_text(
+                    "Compact when working context reaches (tokens, >= 1000)",
+                    default=str(at_tokens),
+                )
+                if raw is None:
+                    console.print_system_message("Cancelled.", title="Compaction")
+                    return True
+                kwargs["compact_at_tokens"] = int(raw.strip().replace(",", ""))
+
+            elif picked == KEEP_LABEL:
+                raw = console.prompt_text(
+                    "Keep this many recent messages raw (>= 2)",
+                    default=str(keep),
+                )
+                if raw is None:
+                    console.print_system_message("Cancelled.", title="Compaction")
+                    return True
+                kwargs["compact_keep_messages"] = int(raw.strip())
+
+            settings = update_app_settings(**kwargs)
+        except ValueError as e:
+            console.print_error(f"Invalid value: {e}", title="Compaction")
+            return True
+
+        agent.config.apply_app_settings(settings)
+        console.print_system_message(
+            f"Enabled: {agent.config.compaction_enabled}\n"
+            f"Threshold: {agent.config.compact_at_tokens:,} tokens\n"
+            f"Keep raw: last {agent.config.compact_keep_messages} messages\n"
+            "Saved to auth.json (app_settings).",
+            title="Compaction",
+        )
+        return True
+
     def prices(self) -> bool:
         """Set estimated input/output USD price per million tokens"""
         from config import update_app_settings
