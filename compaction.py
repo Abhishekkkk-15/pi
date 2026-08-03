@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence, Final
 
 from models import Message, Role, Session
 from tokenizer import count_messages
@@ -11,6 +11,7 @@ from tokenizer import count_messages
 
 SUMMARY_PREFIX = "[Prior conversation summary]"
 
+# PI's github path for compaction : https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts
 
 def _role_str(role: Any) -> str:
     if isinstance(role, Role):
@@ -39,6 +40,8 @@ def _format_message_dict(msg: dict) -> Optional[str]:
             if not isinstance(tool, dict):
                 continue
             fn = tool.get("function") if isinstance(tool.get("function"), dict) else {}
+            if not fn:
+                continue
             fn_name = fn.get("name", "unknown_tool")
             fn_args = fn.get("arguments", "{}")
             assistant_block.append(f"[CALL TOOL: {fn_name}({fn_args})]")
@@ -88,23 +91,125 @@ def jsonl_to_clean_transcript(jsonl_data: str) -> str:
     return messages_to_clean_transcript(parsed)
 
 
+# def build_summarizer_prompt(old_summary: str, segment_transcript: str) -> str:
+#     """Prompt for the compaction LLM. Always includes any prior summary."""
+#     prior = (old_summary or "")
+#     if not prior:
+#         print("not prior summary")
+#     return (
+#         "You are compacting a coding-agent conversation into one dense summary "
+#         "that will replace older turns in the model context.\n\n"
+#         "Include: user goals, key decisions, files created/edited, commands run, "
+#         "errors and fixes, open todos / next steps.\n"
+#         "Omit: fluff, repeated tool dumps, full file contents, system-prompt noise.\n"
+#         "Write plain text. Be concise but complete enough to continue the work.\n\n"
+#         "=== PREVIOUS SUMMARY (fold this in; do not discard) ===\n"
+#         f"{prior}\n\n"
+#         "=== NEW SEGMENT TO FOLD IN ===\n"
+#         f"{segment_transcript.strip()}\n\n"
+#         "=== UPDATED SUMMARY ===\n"
+#         "Write a single updated summary that replaces the previous one:\n"
+#     )
+
+SUMMARIZE_PROMPT: Final[str]= """
+The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+
+Use this EXACT format:
+
+## Goal
+[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
+
+## Constraints & Preferences
+- [Any constraints, preferences, or requirements mentioned by user]
+- [Or "(none)" if none were mentioned]
+
+## Progress
+### Done
+- [x] [Completed tasks/changes]
+
+### In Progress
+- [ ] [Current work]
+
+### Blocked
+- [Issues preventing progress, if any]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+1. [Ordered list of what should happen next]
+
+## Critical Context
+- [Any data, examples, or references needed to continue]
+- [Or "(none)" if not applicable]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages
+"""
+
+UPDATE_SUMMARY_PROMPT :Final[str] = """
+The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+
+Update the existing structured summary with new information. RULES:
+- PRESERVE all existing information from the previous summary
+- ADD new progress, decisions, and context from the new messages
+- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
+- UPDATE "Next Steps" based on what was accomplished
+- PRESERVE exact file paths, function names, and error messages
+- If something is no longer relevant, you may remove it
+
+Use this EXACT format:
+
+## Goal
+[Preserve existing goals, add new ones if the task expanded]
+
+## Constraints & Preferences
+- [Preserve existing, add new ones discovered]
+
+## Progress
+### Done
+- [x] [Include previously done items AND newly completed items]
+
+### In Progress
+- [ ] [Current work - update based on progress]
+
+### Blocked
+- [Current blockers - remove if resolved]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale] (preserve all previous, add new)
+
+## Next Steps
+1. [Update based on current state]
+
+## Critical Context
+- [Preserve important context, add new if needed]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages.
+"""
+
 def build_summarizer_prompt(old_summary: str, segment_transcript: str) -> str:
     """Prompt for the compaction LLM. Always includes any prior summary."""
-    prior = (old_summary or "").strip() or "(none — this is the first compaction)"
-    return (
-        "You are compacting a coding-agent conversation into one dense summary "
-        "that will replace older turns in the model context.\n\n"
-        "Include: user goals, key decisions, files created/edited, commands run, "
-        "errors and fixes, open todos / next steps.\n"
-        "Omit: fluff, repeated tool dumps, full file contents, system-prompt noise.\n"
-        "Write plain text. Be concise but complete enough to continue the work.\n\n"
-        "=== PREVIOUS SUMMARY (fold this in; do not discard) ===\n"
-        f"{prior}\n\n"
-        "=== NEW SEGMENT TO FOLD IN ===\n"
-        f"{segment_transcript.strip()}\n\n"
-        "=== UPDATED SUMMARY ===\n"
-        "Write a single updated summary that replaces the previous one:\n"
-    )
+    prior = (old_summary or "").strip()
+    base_prompt = UPDATE_SUMMARY_PROMPT if prior else SUMMARIZE_PROMPT
+
+    # Conversation first so "messages above" in the template refers to real turns.
+    # Use f-strings / concatenation — ${...} is JavaScript and stays literal in Python.
+    parts = [
+        "<conversation>\n",
+        segment_transcript.strip(),
+        "\n</conversation>\n\n",
+    ]
+    if prior:
+        parts.extend(
+            [
+                "<previous-summary>\n",
+                prior,
+                "\n</previous-summary>\n\n",
+            ]
+        )
+    parts.append(base_prompt.strip())
+    parts.append("\n")
+    return "".join(parts)
 
 
 def find_keep_start(messages: list[Message], keep_messages: int) -> int:
