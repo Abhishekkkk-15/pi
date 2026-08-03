@@ -249,6 +249,11 @@ def message_to_rough_text(message: Message) -> str:
     return "\n".join(parts)
 
 
+# When over token budget but message count is still inside the normal keep
+# window (few huge turns), shrink keep down to this floor so we can still fold.
+MIN_KEEP_ON_OVERFLOW = 2
+
+
 class Compaction:
     """Decide when to compact and how to split / prompt the summarizer."""
 
@@ -303,35 +308,91 @@ class Compaction:
         out.extend(messages[tail_start:])
         return out
 
+    def working_token_count(
+        self,
+        messages: list[Message],
+        session: Session | None,
+    ) -> int:
+        working = self.working_messages(messages, session)
+        try:
+            _, total, _ = count_messages(working, provider=self.provider)
+            return total
+        except Exception:
+            return sum(len(message_to_rough_text(m)) for m in working) // 4
+
+    def over_token_budget(
+        self,
+        messages: list[Message],
+        session: Session | None,
+    ) -> bool:
+        return self.working_token_count(messages, session) >= self.compact_at_tokens
+
+    def _foldable(
+        self,
+        messages: list[Message],
+        session: Session | None,
+        keep_messages: int,
+    ) -> bool:
+        keep_start = find_keep_start(messages, keep_messages)
+        until = int(session.compacted_until if session else 0)
+        has_system = bool(messages) and _role_str(messages[0].role) == "system"
+        min_until = 1 if has_system else 0
+        return keep_start > max(until, min_until)
+
+    def effective_keep_messages(
+        self,
+        messages: list[Message],
+        session: Session | None,
+        *,
+        allow_shrink: bool,
+    ) -> int:
+        """
+        Keep-window size for this pass.
+
+        If the normal keep window leaves nothing to fold but ``allow_shrink``
+        is set (over token budget / manual force), shrink keep down toward
+        MIN_KEEP_ON_OVERFLOW so large-but-few turns can still be summarized.
+        """
+        normal = max(self.keep_messages, MIN_KEEP_ON_OVERFLOW)
+        if self._foldable(messages, session, normal):
+            return normal
+        if not allow_shrink:
+            return normal
+
+        has_system = bool(messages) and _role_str(messages[0].role) == "system"
+        body_len = len(messages) - (1 if has_system else 0)
+        # Need at least one message outside the keep tail
+        for keep in range(min(normal, body_len) - 1, MIN_KEEP_ON_OVERFLOW - 1, -1):
+            if keep < MIN_KEEP_ON_OVERFLOW:
+                break
+            if self._foldable(messages, session, keep):
+                return keep
+        return MIN_KEEP_ON_OVERFLOW
+
     def should_compact(
         self,
         messages: list[Message],
         session: Session | None,
     ) -> bool:
-        keep_start = find_keep_start(messages, self.keep_messages)
-        until = int(session.compacted_until if session else 0)
-        has_system = bool(messages) and _role_str(messages[0].role) == "system"
-        min_until = 1 if has_system else 0
-        if keep_start <= max(until, min_until):
+        """Auto-trigger: over token budget and a foldable segment exists (maybe with shrunk keep)."""
+        if not self.over_token_budget(messages, session):
             return False
-
-        working = self.working_messages(messages, session)
-        try:
-            _, total, _ = count_messages(working, provider=self.provider)
-        except Exception:
-            total = sum(len(message_to_rough_text(m)) for m in working) // 4
-        return total >= self.compact_at_tokens
+        keep = self.effective_keep_messages(messages, session, allow_shrink=True)
+        return self._foldable(messages, session, keep)
 
     def plan_segment(
         self,
         messages: list[Message],
         session: Session | None,
-    ) -> Optional[tuple[list[Message], int]]:
+        *,
+        keep_messages: int | None = None,
+    ) -> Optional[tuple[list[Message], int, int]]:
         """
-        Returns (segment_to_summarize, new_compacted_until) or None if nothing to do.
+        Returns (segment_to_summarize, new_compacted_until, keep_used) or None.
         Segment is only the *new* aged messages (not already covered by summary).
         """
-        keep_start = find_keep_start(messages, self.keep_messages)
+        keep = self.keep_messages if keep_messages is None else keep_messages
+        keep_start = find_keep_start(messages, keep)
         until = int(session.compacted_until if session else 0)
         until = max(0, min(until, len(messages)))
         has_system = bool(messages) and _role_str(messages[0].role) == "system"
@@ -345,7 +406,7 @@ class Compaction:
         segment = messages[until:keep_start]
         if not segment:
             return None
-        return segment, keep_start
+        return segment, keep_start, keep
 
     def build_prompt(self, old_summary: str, segment: list[Message]) -> str:
         transcript = messages_to_clean_transcript(segment)

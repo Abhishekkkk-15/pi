@@ -335,18 +335,34 @@ class Agent:
         if not force and not comp.should_compact(self.memory.messages, session):
             return "Below threshold — nothing to compact."
 
-        planned = comp.plan_segment(self.memory.messages, session)
+        # Over budget (or manual): may shrink keep window for few huge turns
+        allow_shrink = force or comp.over_token_budget(self.memory.messages, session)
+        keep = comp.effective_keep_messages(
+            self.memory.messages,
+            session,
+            allow_shrink=allow_shrink,
+        )
+        planned = comp.plan_segment(
+            self.memory.messages,
+            session,
+            keep_messages=keep,
+        )
         if not planned:
             return (
                 "Nothing new to fold — recent messages already cover the keep window "
-                f"(keep={self.config.compact_keep_messages})."
+                f"(keep={keep}, configured={self.config.compact_keep_messages})."
             )
-        segment, new_until = planned
+        segment, new_until, keep_used = planned
 
         interrupt_controller.check()
+        shrink_note = (
+            f", keep shrunk {self.config.compact_keep_messages}→{keep_used}"
+            if keep_used < self.config.compact_keep_messages
+            else ""
+        )
         self.console.console.print(
             "[dim]Compacting older context "
-            f"({len(segment)} message(s) → summary)...[/dim]"
+            f"({len(segment)} message(s) → summary{shrink_note})...[/dim]"
         )
         prompt = comp.build_prompt(session.compaction_summary, segment)
         try:
@@ -373,7 +389,7 @@ class Agent:
         self._persist_session_usage()
         msg = (
             f"Compacted through message {new_until} "
-            f"({len(segment)} folded; prior summary included)."
+            f"({len(segment)} folded; keep={keep_used}; prior summary included)."
         )
         self.console.console.print(f"[dim]{msg}[/dim]")
         return msg
