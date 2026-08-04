@@ -81,10 +81,15 @@ def execute_write(path: str, content: str) -> str:
     """Creates or completely overwrites a file with the given content."""
     try:
         filepath = Path(path)
+        existed = filepath.exists() and filepath.is_file()
         # Create parent directories if they don't exist
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        filepath.write_text(content, encoding="utf-8")
-        return f"Successfully wrote to '{path}'."
+        text = content or ""
+        filepath.write_text(text, encoding="utf-8")
+        lines = len(text.splitlines()) if text else 0
+        nbytes = len(text.encode("utf-8"))
+        action = "Overwrote" if existed else "Created"
+        return f"{action} '{path}' - {lines} lines, {nbytes} bytes."
     except Exception as e:
         return f"Error writing file '{path}': {str(e)}"
 
@@ -98,8 +103,10 @@ def execute_edit(path: str, edits: List[Dict[str, str]]) -> str:
         filepath = Path(path)
         if not filepath.exists():
             return f"Error: File '{path}' does not exist."
-        
+
         content = filepath.read_text(encoding="utf-8")
+        old_lines = 0
+        new_lines = 0
 
         for i, edit in enumerate(edits):
             old_text = edit.get("oldText", "")
@@ -110,7 +117,7 @@ def execute_edit(path: str, edits: List[Dict[str, str]]) -> str:
                     f"Error in edit entry {i + 1}: Could not find exact match for 'oldText'.\n"
                     f"Target text was:\n{old_text}"
                 )
-            
+
             # Check for multiple occurrences
             occurrences = content.count(old_text)
             if occurrences > 1:
@@ -119,11 +126,16 @@ def execute_edit(path: str, edits: List[Dict[str, str]]) -> str:
                     "Provide more surrounding context in 'oldText' to make it unique."
                 )
 
+            old_lines += len(old_text.splitlines()) if old_text else 0
+            new_lines += len(new_text.splitlines()) if new_text else 0
             # Replace the exact block
             content = content.replace(old_text, new_text, 1)
 
         filepath.write_text(content, encoding="utf-8")
-        return f"Successfully applied {len(edits)} edit(s) to '{path}'."
+        return (
+            f"Applied {len(edits)} edit(s) to '{path}' - "
+            f"-{old_lines}/+{new_lines} lines."
+        )
 
     except Exception as e:
         return f"Error editing file '{path}': {str(e)}"

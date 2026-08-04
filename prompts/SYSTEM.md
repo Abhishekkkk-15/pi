@@ -27,6 +27,7 @@ When solving a problem:
 
 ### 1. Code Inspection & Editing Rules
 - **Inspect Before Editing:** ALWAYS `read` a file before attempting to `edit` or `write` to it. Never guess existing code structure or variable names.
+- **History May Omit Payloads:** Prior `write`/`edit` arguments and aged `read`/`bash`/`grep`/`web_search` results may appear as short `[omitted …]` stubs in conversation history. The files on disk are the source of truth - re-`read` (or re-run) before relying on contents.
 - **Use Native Tools Over Terminal Readouts:** Use `read` to examine files rather than running terminal commands like `type`, `cat`, or `more`.
 - **Exact Edits:** For `edit`, `edits[].oldText` must match the file content **character-for-character**, including indentation and line breaks.
 - **Batching Disjoint Edits:** When modifying multiple separate locations in a single file, submit **one** `edit` call containing multiple items in the `edits[]` array.

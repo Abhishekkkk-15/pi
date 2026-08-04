@@ -18,6 +18,11 @@ from permissions import PermissionManager, PermissionDecision
 from typing import Any, Optional
 from interrupt import AgentInterrupted, interrupt_controller
 from compaction import Compaction
+from history_stub import (
+    age_out_large_payloads,
+    stub_assistant_tool_call,
+    tool_succeeded,
+)
 
 
 def sanitize_api_messages(raw_messages: list[dict]) -> list[dict]:
@@ -296,6 +301,17 @@ class Agent:
         self.memory.messages.append(msg)
         if self.memory and self.memory.session:
             self.memory.write_to_jsonl(self.memory.session.history_path, [msg], mode="a")
+
+    def _rewrite_session_history(self) -> None:
+        """Rewrite conversation_history.jsonl from in-memory messages (after stubbing)."""
+        session = self.memory.session
+        if not session:
+            return
+        self.memory.write_to_jsonl(
+            session.history_path,
+            self.memory.messages,
+            mode="w",
+        )
 
     def _compaction(self) -> Compaction:
         return Compaction(
@@ -590,6 +606,7 @@ class Agent:
                 self._append_message(chat_msg)
 
                 if llm_res.message.tool_calls:  # type: ignore
+                    history_dirty = False
                     for tool in llm_res.message.tool_calls:  # type: ignore
                         interrupt_controller.check()
                         tool_name = tool.function.name  # type: ignore
@@ -603,6 +620,16 @@ class Agent:
                             fn_output = f"Error executing tool {tool_name}: {str(e)}"
                             self.console.print_error(fn_output, title="Tool Error")
                         self.console.print_tool_result(fn_output)
+
+                        # Collapse fat write/edit args in history (disk is source of truth)
+                        if tool_name in ("write", "edit") and tool_succeeded(fn_output):
+                            if stub_assistant_tool_call(
+                                chat_msg,
+                                tool_call_id=getattr(tool, "id", None),
+                                tool_name=tool_name,
+                            ):
+                                history_dirty = True
+
                         tool_msg = Message(
                             role=Role.TOOL,
                             name=tool_name,
@@ -610,6 +637,12 @@ class Agent:
                             tool_call_id=tool.id,
                         )
                         self._append_message(tool_msg)
+
+                    keep = max(int(self.config.compact_keep_messages or 16), 12)
+                    if age_out_large_payloads(self.memory.messages, keep_recent=keep):
+                        history_dirty = True
+                    if history_dirty:
+                        self._rewrite_session_history()
                 else:
                     return res.choices[0]
         except AgentInterrupted:
