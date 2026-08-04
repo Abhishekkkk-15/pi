@@ -529,6 +529,54 @@ class Commands:
         )
         return True
 
+    def max_tokens(self) -> bool:
+        """Set max generation tokens for LLM requests (or clear it)"""
+        from config import update_app_settings
+
+        agent = self.agent
+        console = agent.console
+        current = agent.config.max_tokens
+        current_str = str(current) if current is not None else "None (provider default)"
+
+        console.print_system_message(
+            f"Current MAX_TOKENS limit: {current_str}\n"
+            "This limits the maximum completion tokens requested from the model.",
+            title="Max Tokens",
+        )
+        raw = console.prompt_text(
+            "Enter max tokens value (>= 1) or 'none'/'clear' to remove limit",
+            default="" if current is None else str(current),
+        )
+        if raw is None:
+            console.print_system_message("Cancelled.", title="Max Tokens")
+            return True
+
+        cleaned = raw.strip().lower()
+        if cleaned in ("none", "clear", ""):
+            settings = update_app_settings(clear_max_tokens=True)
+            agent.config.apply_app_settings(settings)
+            console.print_system_message(
+                "Max tokens limit removed. Provider defaults will be used.\n"
+                "Saved to auth.json (app_settings).",
+                title="Max Tokens",
+            )
+            return True
+
+        try:
+            value = int(cleaned)
+            settings = update_app_settings(max_tokens=value)
+        except ValueError as e:
+            console.print_error(f"Invalid value: {e}", title="Max Tokens")
+            return True
+
+        agent.config.apply_app_settings(settings)
+        console.print_system_message(
+            f"Max tokens set to {agent.config.max_tokens}.\n"
+            "Saved to auth.json (app_settings).",
+            title="Max Tokens",
+        )
+        return True
+
     def compact(self) -> bool:
         """Run compaction now (manual), even if under the auto threshold"""
         agent = self.agent

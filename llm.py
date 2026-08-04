@@ -508,6 +508,8 @@ class Agent:
                     }
                     if use_tools:
                         kwargs["tools"] = TOOLS
+                    if self.config.max_tokens is not None:
+                        kwargs["max_tokens"] = self.config.max_tokens
                     if not self.client:
                         result["error"] = RuntimeError(
                             "No LLM client configured. Run /login first."

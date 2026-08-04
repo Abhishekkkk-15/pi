@@ -398,6 +398,17 @@ def get_app_settings(auth: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     else:
         compact_enabled = bool(compact_enabled)
 
+    max_tokens = raw.get("max_tokens")
+    if max_tokens is None:
+        env_tokens = os.getenv("MAX_TOKENS")
+        if env_tokens and env_tokens.isdigit():
+            max_tokens = int(env_tokens)
+    else:
+        try:
+            max_tokens = int(max_tokens) if max_tokens is not None else None
+        except (TypeError, ValueError):
+            max_tokens = None
+
     return {
         "max_history_messages": max_hist,
         "input_price_per_mtok": _price(
@@ -416,6 +427,7 @@ def get_app_settings(auth: Optional[dict[str, Any]] = None) -> dict[str, Any]:
             DEFAULT_COMPACT_KEEP_MESSAGES,
             minimum=2,
         ),
+        "max_tokens": max_tokens,
     }
 
 
@@ -427,6 +439,8 @@ def update_app_settings(
     compaction_enabled: Optional[bool] = None,
     compact_at_tokens: Optional[int] = None,
     compact_keep_messages: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    clear_max_tokens: bool = False,
     auth: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Persist one or more app settings into auth.json and return the full settings dict."""
@@ -468,6 +482,14 @@ def update_app_settings(
             raise ValueError("compact_keep_messages must be >= 2")
         bucket["compact_keep_messages"] = value
 
+    if clear_max_tokens:
+        bucket["max_tokens"] = None
+    elif max_tokens is not None:
+        value = int(max_tokens)
+        if value < 1:
+            raise ValueError("max_tokens must be >= 1")
+        bucket["max_tokens"] = value
+
     data["app_settings"] = bucket
     save_auth(data)
     return get_app_settings(data)
@@ -484,6 +506,7 @@ class Config:
     compaction_enabled: bool = True
     compact_at_tokens: int = DEFAULT_COMPACT_AT_TOKENS
     compact_keep_messages: int = DEFAULT_COMPACT_KEEP_MESSAGES
+    max_tokens: int | None = None
     api_key: str | None = None
     provider: str = "mistral"
     base_url: str = BUILTIN_PROVIDERS["mistral"]["base_url"]
@@ -520,6 +543,7 @@ class Config:
         self.compaction_enabled = bool(app["compaction_enabled"])
         self.compact_at_tokens = int(app["compact_at_tokens"])
         self.compact_keep_messages = int(app["compact_keep_messages"])
+        self.max_tokens = app.get("max_tokens")
 
         auto_risk = os.getenv("AUTONOMOUS_RISK")
         if auto_risk:
@@ -534,6 +558,7 @@ class Config:
         self.compaction_enabled = bool(app["compaction_enabled"])
         self.compact_at_tokens = int(app["compact_at_tokens"])
         self.compact_keep_messages = int(app["compact_keep_messages"])
+        self.max_tokens = app.get("max_tokens")
 
     def reload_from_auth(self) -> None:
         """Refresh provider/model/api_key/base_url from auth.json."""
