@@ -322,6 +322,8 @@ class ConsoleUI:
         self._session_title: str = " "
         self._session_workspace: str = ""
         self._at_gap: bool = True
+        self._current_tokens: int = 0
+        self._context_window: int = 128000
         self.theme: str = apply_theme(_load_theme_preference())
         self._slash_commands: List[str] = [
             "/help",
@@ -339,6 +341,52 @@ class ConsoleUI:
             "exit",
             "quit",
         ]
+
+    def set_context_state(self, current_tokens: int, context_window: int) -> None:
+        """Update current active working context token count and context limit."""
+        if context_window > 0:
+            self._context_window = context_window
+        self._current_tokens = max(0, current_tokens)
+
+    def _get_context_bar_info(self) -> tuple[str, str, float]:
+        """Returns (double_ring_glyph, color_style, percentage)."""
+        cw = max(1, self._context_window)
+        pct = round((self._current_tokens / cw) * 100, 1)
+        if pct >= 80.0:
+            glyph = "◉"
+            color = "ansired"
+        elif pct >= 50.0:
+            glyph = "⊙"
+            color = "ansiyellow"
+        else:
+            glyph = "◎"
+            color = "ansigreen"
+        return glyph, color, pct
+
+    def _render_context_toolbar(self) -> FormattedText:
+        """Renders bottom toolbar for prompt_toolkit with double ring linear progress bar."""
+        cw = max(1, self._context_window)
+        curr = self._current_tokens
+        pct = min(100.0, max(0.0, (curr / cw) * 100))
+        glyph, color, _ = self._get_context_bar_info()
+
+        bar_len = 10
+        filled = int(round((pct / 100.0) * bar_len))
+        filled = max(0, min(bar_len, filled))
+        empty = bar_len - filled
+        bar_str = ("▰" * filled) + ("▱" * empty)
+
+        if cw >= 1_000_000:
+            cw_str = f"{cw / 1_000_000:.1f}M".replace(".0M", "M")
+        elif cw >= 1_000:
+            cw_str = f"{cw // 1_000}k"
+        else:
+            cw_str = str(cw)
+
+        return FormattedText([
+            (f"class:toolbar-{color}", f" {glyph} {bar_str} "),
+            ("", f"{pct:.1f}% ({curr:,} / {cw:,} tokens [{cw_str}])"),
+        ])
 
     def set_slash_commands(self, commands: List[str]) -> None:
         """Update autocomplete list from Commands registry (plus console-local ones)."""
@@ -828,6 +876,10 @@ class ConsoleUI:
         pt_style = PtStyle.from_dict(
             {
                 "prompt": f"{ACCENT} bold",
+                "toolbar-ansigreen": "ansigreen bold",
+                "toolbar-ansiyellow": "ansiyellow bold",
+                "toolbar-ansired": "ansired bold",
+                "bottom-toolbar": "fg:#8a8a8a bg:#1a1a1a",
                 "": INK,
             }
         )
@@ -844,6 +896,7 @@ class ConsoleUI:
                     key_bindings=bindings,
                     style=pt_style,
                     multiline=False,
+                    bottom_toolbar=self._render_context_toolbar,
                 )
             except KeyboardInterrupt:
                 raise
@@ -1721,10 +1774,24 @@ class ConsoleUI:
         total_tokens: int,
         estimated_cost_usd: float,
     ) -> None:
-        """Quiet one-line session token/cost summary."""
+        """Quiet one-line session token/cost summary with context bar indicator."""
+        glyph, color_name, pct = self._get_context_bar_info()
+        color_style = "bold green" if color_name == "ansigreen" else ("bold yellow" if color_name == "ansiyellow" else "bold red")
+
+        cw = max(1, self._context_window)
+        if cw >= 1_000_000:
+            cw_str = f"{cw / 1_000_000:.1f}M".replace(".0M", "M")
+        elif cw >= 1_000:
+            cw_str = f"{cw // 1_000}k"
+        else:
+            cw_str = str(cw)
+
         line = Text()
-        line.append(f"{total_tokens:,} tokens", style="dim")
-        line.append(f"  in {prompt_tokens:,} {GLYPH['dot']} out {completion_tokens:,}", style="dim")
+        line.append(f"{glyph} ", style=color_style)
+        line.append(f"{pct:.1f}% context ", style="dim")
+        line.append(f"({self._current_tokens:,}/{cw:,} tokens [{cw_str}])", style="dim")
+        line.append(f"  {GLYPH['dot']}  {total_tokens:,} turn tokens", style="dim")
+        line.append(f" (in {prompt_tokens:,} {GLYPH['dot']} out {completion_tokens:,})", style="dim")
         line.append(f"  ~${estimated_cost_usd:.4f}", style="dim")
         self._emit(self._gutter(" ", "dim", line))
 

@@ -179,6 +179,14 @@ class Commands:
             system_prompt=agent.prompt.raw_system_prompt,
         )
         agent.memory.session = selected_session
+        agent.memory.messages = old_chats
+
+        # Immediately calculate and sync context state for the resumed session
+        comp = agent._compaction()
+        working_tokens = comp.working_token_count(old_chats, selected_session)
+        cw = agent.get_model_context_window()
+        agent.console.set_context_state(working_tokens, cw)
+
         agent.console.print_welcome(
             selected_session.title,
             str(selected_session.workspace),

@@ -346,6 +346,10 @@ class Agent:
         session = self.memory.session
         if not session:
             return
+        comp = self._compaction()
+        working_tokens = comp.working_token_count(self.memory.messages, session)
+        cw = self.get_model_context_window()
+        self.console.set_context_state(working_tokens, cw)
         self.console.print_usage_summary(
             session.prompt_tokens,
             session.completion_tokens,
@@ -529,6 +533,9 @@ class Agent:
         """System + optional summary + recent raw messages."""
         comp = self._compaction()
         working = comp.working_messages(self.memory.messages, self.memory.session)
+        working_tokens = comp.working_token_count(self.memory.messages, self.memory.session)
+        cw = self.get_model_context_window()
+        self.console.set_context_state(working_tokens, cw)
         raw_dicts = [m.to_dict() for m in working]
         return sanitize_api_messages(raw_dicts)
 
