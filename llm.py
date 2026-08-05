@@ -472,16 +472,26 @@ class Agent:
                 print_content_header = False
                 loading_active = False
 
-                for chunk in stream:
-                    if hasattr(chunk, "usage") and chunk.usage:
-                        usage_obj = chunk.usage
+                def _get_val(obj, key, default=None):
+                    if isinstance(obj, dict):
+                        return obj.get(key, default)
+                    return getattr(obj, key, default)
 
-                    if not chunk.choices:
+                for chunk in stream:
+                    current_usage = _get_val(chunk, "usage")
+                    if current_usage:
+                        usage_obj = current_usage
+
+                    choices = _get_val(chunk, "choices")
+                    if not choices:
                         continue
-                    delta = chunk.choices[0].delta
+                    
+                    delta = _get_val(choices[0], "delta")
+                    if not delta:
+                        continue
 
                     # Stream reasoning/thinking
-                    reasoning = getattr(delta, "reasoning_content", None)
+                    reasoning = _get_val(delta, "reasoning_content")
                     if reasoning:
                         if loading_active:
                             self.console.stop_loading()
@@ -493,7 +503,7 @@ class Agent:
                         reasoning_parts.append(reasoning)
 
                     # Stream normal response content
-                    content = getattr(delta, "content", None)
+                    content = _get_val(delta, "content")
                     if content:
                         if print_thinking_header:
                             self.console.stream_thinking_end()
@@ -508,7 +518,7 @@ class Agent:
                         content_parts.append(content)
 
                     # Stream tool calls (silently buffer arguments, update dynamic loading text)
-                    tool_calls = getattr(delta, "tool_calls", None)
+                    tool_calls = _get_val(delta, "tool_calls")
                     if tool_calls:
                         if print_thinking_header:
                             self.console.stream_thinking_end()
@@ -518,20 +528,25 @@ class Agent:
                             print_content_header = False
 
                         for tc in tool_calls:
-                            idx = tc.index
+                            idx = _get_val(tc, "index")
+                            tc_id = _get_val(tc, "id")
+                            tc_function = _get_val(tc, "function")
+
                             if idx not in tool_calls_map:
                                 tool_calls_map[idx] = {
-                                    "id": tc.id,
+                                    "id": tc_id,
                                     "type": "function",
                                     "function": {"name": "", "arguments": ""}
                                 }
-                            if tc.id:
-                                tool_calls_map[idx]["id"] = tc.id
-                            if tc.function:
-                                if tc.function.name:
-                                    tool_calls_map[idx]["function"]["name"] += tc.function.name
-                                if tc.function.arguments:
-                                    tool_calls_map[idx]["function"]["arguments"] += tc.function.arguments
+                            if tc_id:
+                                tool_calls_map[idx]["id"] = tc_id
+                            if tc_function:
+                                fn_name = _get_val(tc_function, "name")
+                                fn_args = _get_val(tc_function, "arguments")
+                                if fn_name:
+                                    tool_calls_map[idx]["function"]["name"] += fn_name
+                                if fn_args:
+                                    tool_calls_map[idx]["function"]["arguments"] += fn_args
 
                             total_arg_bytes = sum(len(tc_data["function"]["arguments"]) for tc_data in tool_calls_map.values())
                             kb = total_arg_bytes / 1024.0
