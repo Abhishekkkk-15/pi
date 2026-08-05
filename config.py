@@ -348,7 +348,7 @@ DEFAULT_MAX_HISTORY_MESSAGES = 32
 DEFAULT_INPUT_PRICE_PER_MTOK = 0.50
 DEFAULT_OUTPUT_PRICE_PER_MTOK = 1.50
 DEFAULT_COMPACT_AT_TOKENS = 20_000
-DEFAULT_COMPACT_KEEP_MESSAGES = 16
+DEFAULT_KEEP_RECENT_TOKENS = 20_000
 
 
 def get_app_settings(auth: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -421,11 +421,11 @@ def get_app_settings(auth: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         "compact_at_tokens": _int(
             "compact_at_tokens", "COMPACT_AT_TOKENS", DEFAULT_COMPACT_AT_TOKENS, minimum=1000
         ),
-        "compact_keep_messages": _int(
-            "compact_keep_messages",
-            "COMPACT_KEEP_MESSAGES",
-            DEFAULT_COMPACT_KEEP_MESSAGES,
-            minimum=2,
+        "keep_recent_tokens": _int(
+            "keep_recent_tokens",
+            "KEEP_RECENT_TOKENS",
+            DEFAULT_KEEP_RECENT_TOKENS,
+            minimum=1000,
         ),
         "max_tokens": max_tokens,
     }
@@ -438,7 +438,7 @@ def update_app_settings(
     output_price_per_mtok: Optional[float] = None,
     compaction_enabled: Optional[bool] = None,
     compact_at_tokens: Optional[int] = None,
-    compact_keep_messages: Optional[int] = None,
+    keep_recent_tokens: Optional[int] = None,
     max_tokens: Optional[int] = None,
     clear_max_tokens: bool = False,
     auth: Optional[dict[str, Any]] = None,
@@ -476,11 +476,11 @@ def update_app_settings(
             raise ValueError("compact_at_tokens must be >= 1000")
         bucket["compact_at_tokens"] = value
 
-    if compact_keep_messages is not None:
-        value = int(compact_keep_messages)
-        if value < 2:
-            raise ValueError("compact_keep_messages must be >= 2")
-        bucket["compact_keep_messages"] = value
+    if keep_recent_tokens is not None:
+        value = int(keep_recent_tokens)
+        if value < 1000:
+            raise ValueError("keep_recent_tokens must be >= 1000")
+        bucket["keep_recent_tokens"] = value
 
     if clear_max_tokens:
         bucket["max_tokens"] = None
@@ -505,7 +505,7 @@ class Config:
     output_price_per_mtok: float = DEFAULT_OUTPUT_PRICE_PER_MTOK
     compaction_enabled: bool = True
     compact_at_tokens: int = DEFAULT_COMPACT_AT_TOKENS
-    compact_keep_messages: int = DEFAULT_COMPACT_KEEP_MESSAGES
+    keep_recent_tokens: int = DEFAULT_KEEP_RECENT_TOKENS
     max_tokens: int | None = None
     api_key: str | None = None
     provider: str = "mistral"
@@ -542,7 +542,7 @@ class Config:
         self.output_price_per_mtok = float(app["output_price_per_mtok"])
         self.compaction_enabled = bool(app["compaction_enabled"])
         self.compact_at_tokens = int(app["compact_at_tokens"])
-        self.compact_keep_messages = int(app["compact_keep_messages"])
+        self.keep_recent_tokens = int(app["keep_recent_tokens"])
         self.max_tokens = app.get("max_tokens")
 
         auto_risk = os.getenv("AUTONOMOUS_RISK")
@@ -557,7 +557,7 @@ class Config:
         self.output_price_per_mtok = float(app["output_price_per_mtok"])
         self.compaction_enabled = bool(app["compaction_enabled"])
         self.compact_at_tokens = int(app["compact_at_tokens"])
-        self.compact_keep_messages = int(app["compact_keep_messages"])
+        self.keep_recent_tokens = int(app["keep_recent_tokens"])
         self.max_tokens = app.get("max_tokens")
 
     def reload_from_auth(self) -> None:

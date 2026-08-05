@@ -611,9 +611,13 @@ class Commands:
             return True
 
         session = agent.memory.session
+        cw = agent.get_model_context_window()
+        cw_fmt = format_tokens(cw)
+        keep_recent = agent.config.keep_recent_tokens
+        keep_pct = round((keep_recent / cw) * 100, 1) if cw > 0 else 15.0
         console.print_system_message(
             f"Manual compaction\n"
-            f"Keep raw: last {agent.config.compact_keep_messages} messages\n"
+            f"Keep recent tokens: {keep_recent:,} (~{keep_pct}% of {cw_fmt})\n"
             f"Already compacted until index: {session.compacted_until}\n"
             f"Has prior summary: {'yes' if session.compaction_summary else 'no'}",
             title="Compact",
@@ -636,7 +640,7 @@ class Commands:
         return True
 
     def compaction(self) -> bool:
-        """Configure compaction (enabled, token threshold in percentage or exact count, keep recent messages)"""
+        """Configure compaction (enabled, trigger threshold, keep recent tokens)"""
         from config import update_app_settings
         from llm import format_tokens
 
@@ -644,30 +648,31 @@ class Commands:
         console = agent.console
         enabled = agent.config.compaction_enabled
         at_tokens = agent.config.compact_at_tokens
-        keep = agent.config.compact_keep_messages
+        keep_recent_tokens = agent.config.keep_recent_tokens
 
         cw = agent.get_model_context_window()
         cw_fmt = format_tokens(cw)
-        pct = round((at_tokens / cw) * 100, 1) if cw > 0 else 75.0
+        at_pct = round((at_tokens / cw) * 100, 1) if cw > 0 else 75.0
+        keep_pct = round((keep_recent_tokens / cw) * 100, 1) if cw > 0 else 15.0
 
         RUN_LABEL = "Run compaction now"
         ENABLED_LABEL = f"Enabled  {'on' if enabled else 'off'}"
-        TOKENS_LABEL = f"Compact threshold  {at_tokens:,} tokens ({pct}% of {cw_fmt} context)"
-        KEEP_LABEL = f"Keep recent messages  {keep}"
+        TOKENS_LABEL = f"Compact trigger threshold  {at_tokens:,} tokens ({at_pct}% of {cw_fmt} context)"
+        KEEP_TOKENS_LABEL = f"Keep recent tokens  {keep_recent_tokens:,} tokens ({keep_pct}% of {cw_fmt} context)"
 
         console.print_system_message(
-            f"Compaction summarizes older turns when context is large.\n"
+            f"Compaction summarizes older turns when working context grows large.\n"
             f"Active Model Context Window: {cw_fmt} ({cw:,} tokens)\n"
             f"Enabled: {enabled}\n"
-            f"Threshold: {at_tokens:,} tokens (~{pct}% of context)\n"
-            f"Keep raw: last {keep} messages\n"
-            "Full history stays on disk; only the model context is compacted.\n"
-            "Tip: /compact forces a run immediately.",
+            f"Trigger Threshold: {at_tokens:,} tokens (~{at_pct}% of context)\n"
+            f"Keep Recent Tokens: {keep_recent_tokens:,} tokens (~{keep_pct}% of context)\n"
+            "Full history stays on disk; older context is summarized dynamically.\n"
+            "Tip: /compact forces a compaction run immediately.",
             title="Compaction",
         )
 
         picked = console.interactive_pick(
-            [RUN_LABEL, ENABLED_LABEL, TOKENS_LABEL, KEEP_LABEL],
+            [RUN_LABEL, ENABLED_LABEL, TOKENS_LABEL, KEEP_TOKENS_LABEL],
             title="Compaction",
         )
         if not picked:
@@ -695,7 +700,7 @@ class Commands:
                 MODE_EXACT = "Set by Exact Token Count"
                 mode = console.interactive_pick(
                     [MODE_PCT, MODE_EXACT],
-                    title=f"Set Compaction Threshold (Context: {cw_fmt})",
+                    title=f"Set Trigger Threshold (Context: {cw_fmt})",
                 )
                 if not mode:
                     console.print_system_message("Cancelled.", title="Compaction")
@@ -703,8 +708,8 @@ class Commands:
 
                 if mode == MODE_PCT:
                     raw_pct = console.prompt_text(
-                        f"Enter compaction threshold percentage (1% - 95% of {cw_fmt})",
-                        default=str(int(pct)),
+                        f"Enter compaction trigger threshold percentage (1% - 95% of {cw_fmt})",
+                        default=str(int(at_pct)),
                     )
                     if raw_pct is None:
                         console.print_system_message("Cancelled.", title="Compaction")
@@ -716,7 +721,7 @@ class Commands:
                     target_tokens = max(1000, target_tokens)
                     kwargs["compact_at_tokens"] = target_tokens
                     console.print_system_message(
-                        f"Calculated threshold: {clean_pct}% of {cw_fmt} = {target_tokens:,} tokens.",
+                        f"Calculated trigger threshold: {clean_pct}% of {cw_fmt} = {target_tokens:,} tokens.",
                         title="Threshold Set",
                     )
                 else:
@@ -729,15 +734,44 @@ class Commands:
                         return True
                     kwargs["compact_at_tokens"] = int(raw.strip().replace(",", ""))
 
-            elif picked == KEEP_LABEL:
-                raw = console.prompt_text(
-                    "Keep this many recent messages raw (>= 2)",
-                    default=str(keep),
+            elif picked == KEEP_TOKENS_LABEL:
+                MODE_PCT = f"Set by Percentage (%)  [Active model: {cw_fmt} context]"
+                MODE_EXACT = "Set by Exact Token Count"
+                mode = console.interactive_pick(
+                    [MODE_PCT, MODE_EXACT],
+                    title=f"Set Recent Tokens to Keep (Context: {cw_fmt})",
                 )
-                if raw is None:
+                if not mode:
                     console.print_system_message("Cancelled.", title="Compaction")
                     return True
-                kwargs["compact_keep_messages"] = int(raw.strip())
+
+                if mode == MODE_PCT:
+                    raw_pct = console.prompt_text(
+                        f"Enter recent tokens to keep percentage (1% - 90% of {cw_fmt})",
+                        default=str(int(keep_pct)),
+                    )
+                    if raw_pct is None:
+                        console.print_system_message("Cancelled.", title="Compaction")
+                        return True
+                    clean_pct = float(raw_pct.strip().replace("%", ""))
+                    if not (1 <= clean_pct <= 90):
+                        raise ValueError("Percentage must be between 1% and 90%.")
+                    target_tokens = int(cw * (clean_pct / 100.0))
+                    target_tokens = max(1000, target_tokens)
+                    kwargs["keep_recent_tokens"] = target_tokens
+                    console.print_system_message(
+                        f"Calculated keep recent tokens: {clean_pct}% of {cw_fmt} = {target_tokens:,} tokens.",
+                        title="Keep Tokens Set",
+                    )
+                else:
+                    raw = console.prompt_text(
+                        "Keep this many recent tokens raw (>= 1000)",
+                        default=str(keep_recent_tokens),
+                    )
+                    if raw is None:
+                        console.print_system_message("Cancelled.", title="Compaction")
+                        return True
+                    kwargs["keep_recent_tokens"] = int(raw.strip().replace(",", ""))
 
             settings = update_app_settings(**kwargs)
         except ValueError as e:
@@ -746,11 +780,14 @@ class Commands:
 
         agent.config.apply_app_settings(settings)
         new_at_tokens = agent.config.compact_at_tokens
-        new_pct = round((new_at_tokens / cw) * 100, 1) if cw > 0 else 75.0
+        new_keep_tokens = agent.config.keep_recent_tokens
+        new_at_pct = round((new_at_tokens / cw) * 100, 1) if cw > 0 else 75.0
+        new_keep_pct = round((new_keep_tokens / cw) * 100, 1) if cw > 0 else 15.0
+
         console.print_system_message(
             f"Enabled: {agent.config.compaction_enabled}\n"
-            f"Threshold: {new_at_tokens:,} tokens (~{new_pct}% of {cw_fmt} context)\n"
-            f"Keep raw: last {agent.config.compact_keep_messages} messages\n"
+            f"Trigger Threshold: {new_at_tokens:,} tokens (~{new_at_pct}% of {cw_fmt} context)\n"
+            f"Keep Recent Tokens: {new_keep_tokens:,} tokens (~{new_keep_pct}% of {cw_fmt} context)\n"
             "Saved to auth.json (app_settings).",
             title="Compaction",
         )

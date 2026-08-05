@@ -521,7 +521,7 @@ class Agent:
     def _compaction(self) -> Compaction:
         return Compaction(
             compact_at_tokens=self.config.compact_at_tokens,
-            keep_messages=self.config.compact_keep_messages,
+            keep_recent_tokens=self.config.keep_recent_tokens,
             provider=self.config.provider,
         )
 
@@ -554,33 +554,14 @@ class Agent:
         if not force and not comp.should_compact(self.memory.messages, session):
             return "Below threshold — nothing to compact."
 
-        # Over budget (or manual): may shrink keep window for few huge turns
-        allow_shrink = force or comp.over_token_budget(self.memory.messages, session)
-        keep = comp.effective_keep_messages(
-            self.memory.messages,
-            session,
-            allow_shrink=allow_shrink,
-        )
-        planned = comp.plan_segment(
-            self.memory.messages,
-            session,
-            keep_messages=keep,
-        )
+        planned = comp.plan_segment(self.memory.messages, session)
         if not planned:
-            return (
-                "Nothing new to fold — recent messages already cover the keep window "
-                f"(keep={keep}, configured={self.config.compact_keep_messages})."
-            )
+            return "Nothing new to fold — recent messages already cover the keep window."
         segment, new_until, keep_used = planned
 
-        shrink_note = (
-            f", keep shrunk {self.config.compact_keep_messages}→{keep_used}"
-            if keep_used < self.config.compact_keep_messages
-            else ""
-        )
         self.console.console.print(
             "[dim]Compacting older context "
-            f"({len(segment)} message(s) → summary{shrink_note})...[/dim]"
+            f"({len(segment)} message(s) → summary)...[/dim]"
         )
         prompt = comp.build_prompt(session.compaction_summary, segment)
         try:
@@ -980,8 +961,7 @@ class Agent:
                         )
                         self._append_message(tool_msg)
 
-                    keep = max(int(self.config.compact_keep_messages or 16), 12)
-                    if age_out_large_payloads(self.memory.messages, keep_recent=keep):
+                    if age_out_large_payloads(self.memory.messages, keep_recent=16):
                         history_dirty = True
                     if history_dirty:
                         self._rewrite_session_history()

@@ -228,6 +228,49 @@ def execute_edit(path: str, edits: List[Dict[str, str]]) -> str:
 
 
 
+MAX_BASH_LINES = 2000
+MAX_BASH_BYTES = 50 * 1024  # 50KB
+
+
+def _truncate_bash_output(output: str) -> str:
+    """
+    Truncates command output if it exceeds line or byte limits.
+    Preserves initial output head (first 500 lines) and failure tail (last 1,500 lines)
+    so exit status and error tracebacks remain visible to the model.
+    """
+    text = output.strip()
+    if not text:
+        return text
+
+    lines = text.splitlines()
+    total_lines = len(lines)
+    raw_bytes = len(text.encode("utf-8"))
+
+    if total_lines <= MAX_BASH_LINES and raw_bytes <= MAX_BASH_BYTES:
+        return text
+
+    head_count = 500
+    tail_count = 1500
+
+    if total_lines > (head_count + tail_count):
+        head = lines[:head_count]
+        tail = lines[-tail_count:]
+        omitted = total_lines - (head_count + tail_count)
+        notice = f"\n\n[... Output truncated: {omitted:,} lines ({raw_bytes / 1024:.1f} KB) omitted to stay under 50KB limit ...]\n\n"
+        return "\n".join(head) + notice + "\n".join(tail)
+
+    if raw_bytes > MAX_BASH_BYTES:
+        head_bytes = 15 * 1024
+        tail_bytes = 35 * 1024
+        encoded = text.encode("utf-8")
+        head_part = encoded[:head_bytes].decode("utf-8", errors="ignore")
+        tail_part = encoded[-tail_bytes:].decode("utf-8", errors="ignore")
+        notice = f"\n\n[... Output truncated: {raw_bytes / 1024:.1f} KB exceeded 50KB limit ...]\n\n"
+        return head_part + notice + tail_part
+
+    return text
+
+
 def execute_bash(command: str, timeout: int = 30, is_background: bool = False) -> str:
     """
     Executes a terminal command cross-platform without hanging or freezing.
@@ -301,14 +344,14 @@ def execute_bash(command: str, timeout: int = 30, is_background: bool = False) -
         if is_running:
             if should_run_bg:
                 output = "".join(stdout_lines) + "".join(stderr_lines)
-                output_str = output.strip() if output else "[Process started successfully]"
+                output_str = _truncate_bash_output(output) if output else "[Process started successfully]"
                 return (
                     f"{output_str}\n\n"
                     f"[Background process started and running with PID {proc.pid}]"
                 )
             else:
                 output = "".join(stdout_lines) + "".join(stderr_lines)
-                output_str = output.strip() if output else "[No output received before timeout]"
+                output_str = _truncate_bash_output(output) if output else "[No output received before timeout]"
                 _kill_process_tree(proc.pid)
                 return (
                     f"{output_str}\n\n"
@@ -316,7 +359,9 @@ def execute_bash(command: str, timeout: int = 30, is_background: bool = False) -
                 )
 
         output = "".join(stdout_lines) + "".join(stderr_lines)
-        return output.strip() if output else "[Command finished with no output]"
+        if not output.strip():
+            return "[Command finished with no output]"
+        return _truncate_bash_output(output)
 
     except Exception as e:
         return f"Error executing command: {str(e)}"
