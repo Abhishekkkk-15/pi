@@ -769,6 +769,11 @@ class ConsoleUI:
             )
             self._current_live.start()
 
+    def update_loading_message(self, message: str):
+        """Update the loading message dynamically if spinner is active."""
+        if self._status is not None:
+            self._status.message = message
+
     def stop_loading(self):
         """Stop loading spinner if active."""
         if self._current_live is not None:

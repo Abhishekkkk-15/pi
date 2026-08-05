@@ -218,6 +218,7 @@ class Memory:
                         name=data.get("name", None),
                         tool_calls=data.get("tool_calls", None),
                         tool_call_id=data.get("tool_call_id", None),
+                        reasoning_content=data.get("reasoning_content", None),
                     )
                     messages.append(message)
 

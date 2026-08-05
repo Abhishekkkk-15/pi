@@ -75,10 +75,11 @@ def main():
                 agent.print_session_usage()
                 continue
 
-            # Print assistant response
-            agent.console.print_separator()
-            agent.console.print_assistant_message(response.message.content)  # type: ignore
-            agent.console.print_separator()
+            # Print assistant response if it wasn't already printed/streamed
+            if not getattr(response.message, "already_printed", False):
+                agent.console.print_separator()
+                agent.console.print_assistant_message(response.message.content)  # type: ignore
+                agent.console.print_separator()
             agent.print_session_usage()
             
         except KeyboardInterrupt:

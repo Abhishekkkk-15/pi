@@ -175,17 +175,30 @@ class Agent:
         usage = getattr(response, "usage", None)
         if usage is None:
             return
-        prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
-        completion = int(getattr(usage, "completion_tokens", 0) or 0)
-        total = int(getattr(usage, "total_tokens", 0) or (prompt + completion))
-        
-        cached = 0
-        prompt_details = getattr(usage, "prompt_tokens_details", None)
-        if prompt_details is not None:
-            cached = int(getattr(prompt_details, "cached_tokens", 0) or 0)
-        if not cached:
-            # Try Anthropic-style attributes
-            cached = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+        if isinstance(usage, dict):
+            prompt = int(usage.get("prompt_tokens") or 0)
+            completion = int(usage.get("completion_tokens") or 0)
+            total = int(usage.get("total_tokens") or (prompt + completion))
+            cached = int(usage.get("cached_tokens") or 0)
+            if not cached:
+                pd = usage.get("prompt_tokens_details")
+                if isinstance(pd, dict):
+                    cached = int(pd.get("cached_tokens") or 0)
+            if not cached:
+                cached = int(usage.get("cache_read_input_tokens") or 0)
+        else:
+            prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+            completion = int(getattr(usage, "completion_tokens", 0) or 0)
+            total = int(getattr(usage, "total_tokens", 0) or (prompt + completion))
+            
+            cached = int(getattr(usage, "cached_tokens", 0) or 0)
+            if not cached:
+                prompt_details = getattr(usage, "prompt_tokens_details", None)
+                if prompt_details is not None:
+                    cached = int(getattr(prompt_details, "cached_tokens", 0) or 0)
+            if not cached:
+                # Try Anthropic-style attributes
+                cached = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
 
         if prompt == 0 and completion == 0 and total == 0 and cached == 0:
             return
@@ -407,6 +420,7 @@ class Agent:
         On HTTP 429, rotate to the secondary API key (if configured) and retry once.
         """
         from config import rotate_provider_key
+        from tokenizer import count_messages
 
         def _is_rate_limit(exc: BaseException) -> bool:
             name = type(exc).__name__
@@ -435,26 +449,190 @@ class Agent:
                     return None, RuntimeError(
                         "No LLM client configured. Run /login first."
                     )
-                response = self.client.chat.completions.create(**kwargs)
-                return response, None
-            except Exception as exc:
-                return None, exc
-        def _run_stream() -> tuple[Any, Optional[BaseException]]:
-            try:
-                kwargs: dict[str, Any] = {
-                    "model": self.model_name,
-                    "messages": messages,
-                }
-                if use_tools:
-                    kwargs["tools"] = TOOLS
-                if self.config.max_tokens is not None:
-                    kwargs["max_tokens"] = self.config.max_tokens
-                if not self.client:
-                    return None, RuntimeError(
-                        "No LLM client configured. Run /login first."
+                
+                kwargs["stream"] = True
+                if self.config.provider in ("openai", "groq"):
+                    kwargs["stream_options"] = {"include_usage": True}
+
+                try:
+                    stream = self.client.chat.completions.create(**kwargs)
+                except Exception as e:
+                    if "stream_options" in kwargs:
+                        del kwargs["stream_options"]
+                        stream = self.client.chat.completions.create(**kwargs)
+                    else:
+                        raise e
+
+                content_parts = []
+                reasoning_parts = []
+                tool_calls_map = {}
+                usage_obj = None
+
+                print_thinking_header = False
+                print_content_header = False
+                loading_active = False
+
+                for chunk in stream:
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        usage_obj = chunk.usage
+
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+
+                    # Stream reasoning/thinking
+                    reasoning = getattr(delta, "reasoning_content", None)
+                    if reasoning:
+                        if loading_active:
+                            self.console.stop_loading()
+                            loading_active = False
+                        if not print_thinking_header:
+                            self.console.stream_thinking_start()
+                            print_thinking_header = True
+                        self.console.stream_thinking_chunk(reasoning)
+                        reasoning_parts.append(reasoning)
+
+                    # Stream normal response content
+                    content = getattr(delta, "content", None)
+                    if content:
+                        if print_thinking_header:
+                            self.console.stream_thinking_end()
+                            print_thinking_header = False
+                        if loading_active:
+                            self.console.stop_loading()
+                            loading_active = False
+                        if not print_content_header:
+                            self.console.stream_content_start()
+                            print_content_header = True
+                        self.console.stream_content_chunk(content)
+                        content_parts.append(content)
+
+                    # Stream tool calls (silently buffer arguments, update dynamic loading text)
+                    tool_calls = getattr(delta, "tool_calls", None)
+                    if tool_calls:
+                        if print_thinking_header:
+                            self.console.stream_thinking_end()
+                            print_thinking_header = False
+                        if print_content_header:
+                            self.console.stream_content_end()
+                            print_content_header = False
+
+                        for tc in tool_calls:
+                            idx = tc.index
+                            if idx not in tool_calls_map:
+                                tool_calls_map[idx] = {
+                                    "id": tc.id,
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""}
+                                }
+                            if tc.id:
+                                tool_calls_map[idx]["id"] = tc.id
+                            if tc.function:
+                                if tc.function.name:
+                                    tool_calls_map[idx]["function"]["name"] += tc.function.name
+                                if tc.function.arguments:
+                                    tool_calls_map[idx]["function"]["arguments"] += tc.function.arguments
+
+                            total_arg_bytes = sum(len(tc_data["function"]["arguments"]) for tc_data in tool_calls_map.values())
+                            kb = total_arg_bytes / 1024.0
+                            tool_names = ", ".join(tc_data["function"]["name"] or "tool" for tc_data in tool_calls_map.values())
+                            
+                            if not loading_active:
+                                self.console.start_loading(f"Generating arguments for {tool_names}... ({kb:.1f} KB)")
+                                loading_active = True
+                            else:
+                                self.console.update_loading_message(f"Generating arguments for {tool_names}... ({kb:.1f} KB)")
+
+                if print_thinking_header:
+                    self.console.stream_thinking_end()
+                if print_content_header:
+                    self.console.stream_content_end()
+                if loading_active:
+                    self.console.stop_loading()
+
+                # Reconstruct mock completion objects
+                final_tool_calls = []
+                for idx in sorted(tool_calls_map.keys()):
+                    tc_data = tool_calls_map[idx]
+                    
+                    class MockFunction:
+                        def __init__(self, name, arguments):
+                            self.name = name
+                            self.arguments = arguments
+
+                    class MockToolCall:
+                        def __init__(self, id, function):
+                            self.id = id
+                            self.type = "function"
+                            self.function = function
+                        def model_dump(self):
+                            return {
+                                "id": self.id,
+                                "type": "function",
+                                "function": {
+                                    "name": self.function.name,
+                                    "arguments": self.function.arguments
+                                }
+                            }
+
+                    fn = MockFunction(tc_data["function"]["name"], tc_data["function"]["arguments"])
+                    final_tool_calls.append(MockToolCall(tc_data["id"], fn))
+
+                class MockMessage:
+                    def __init__(self, content, reasoning_content, tool_calls):
+                        self.content = content
+                        self.reasoning_content = reasoning_content
+                        self.tool_calls = tool_calls
+
+                class MockChoice:
+                    def __init__(self, message):
+                        self.message = message
+
+                class MockResponse:
+                    def __init__(self, choices, usage=None):
+                        self.choices = choices
+                        self.usage = usage
+
+                # Estimate tokens locally if the streaming API endpoint omitted the usage payload
+                if usage_obj is None:
+                    msg_objs = []
+                    for m in messages:
+                        msg_objs.append(
+                            Message(
+                                role=Role.from_val(m.get("role")),
+                                content=m.get("content") or "",
+                                name=m.get("name"),
+                                tool_calls=m.get("tool_calls"),
+                                tool_call_id=m.get("tool_call_id")
+                            )
+                        )
+                    _, prompt_tokens, _ = count_messages(msg_objs, provider=self.config.provider)
+                    
+                    completion_msg = Message(
+                        role=Role.ASSISTANT,
+                        content="".join(content_parts)
                     )
-                stream = self.client.chat.completions.create(**kwargs,stream=True)
-                return stream, None
+                    _, completion_tokens, _ = count_messages([completion_msg], provider=self.config.provider)
+                    
+                    class EstimatedUsage:
+                        def __init__(self, prompt, completion):
+                            self.prompt_tokens = prompt
+                            self.completion_tokens = completion
+                            self.total_tokens = prompt + completion
+                            self.prompt_tokens_details = None
+                            self.cache_read_input_tokens = 0
+                    
+                    usage_obj = EstimatedUsage(prompt_tokens, completion_tokens)
+
+                msg = MockMessage(
+                    content="".join(content_parts) or None,
+                    reasoning_content="".join(reasoning_parts) or None,
+                    tool_calls=final_tool_calls if final_tool_calls else None
+                )
+                msg.already_printed = True
+                choice = MockChoice(msg)
+                response = MockResponse([choice], usage=usage_obj)
+                return response, None
             except Exception as exc:
                 return None, exc
 
@@ -522,11 +700,11 @@ class Agent:
 
                 # Print internal thinking/reasoning if present (e.g. from reasoning models)
                 reasoning = getattr(llm_res.message, "reasoning_content", None)
-                if reasoning:
+                if reasoning and not getattr(llm_res.message, "already_printed", False):
                     self.console.print_thinking(reasoning)
 
                 # Print explaining/planning text before tool execution if tools are present
-                if llm_res.message.tool_calls and llm_res.message.content:
+                if llm_res.message.tool_calls and llm_res.message.content and not getattr(llm_res.message, "already_printed", False):
                     self.console.print_assistant_message(llm_res.message.content)
 
                 tool_calls_raw = llm_res.message.tool_calls
@@ -539,6 +717,7 @@ class Agent:
                     role=Role.ASSISTANT,
                     content=llm_res.message.content or "",
                     tool_calls=tool_calls_dicts,
+                    reasoning_content=getattr(llm_res.message, "reasoning_content", None),
                 )
                 self._append_message(chat_msg)
 

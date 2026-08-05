@@ -26,6 +26,7 @@ class Message:
     name:str|None = None
     tool_calls:list[Any]|None = None
     tool_call_id:str|None = None
+    reasoning_content:str|None = None
     
     def __post_init__(self):
         if self.name is None and hasattr(self, "name"):
@@ -36,6 +37,9 @@ class Message:
             
         if self.tool_calls is None and hasattr(self, "tool_calls"):
             del self.tool_calls
+
+        if self.reasoning_content is None and hasattr(self, "reasoning_content"):
+            del self.reasoning_content
             
     def to_dict(self) -> dict:
         """Convert to JSON-serializable dict for the Mistral API."""
@@ -49,6 +53,9 @@ class Message:
         }
         if getattr(self, "name", None) is not None:
             data["name"] = self.name
+
+        if getattr(self, "reasoning_content", None) is not None:
+            data["reasoning_content"] = self.reasoning_content
 
         tool_calls_val = getattr(self, "tool_calls", None)
         if tool_calls_val is not None:
