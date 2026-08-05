@@ -439,6 +439,24 @@ class Agent:
                 return response, None
             except Exception as exc:
                 return None, exc
+        def _run_stream() -> tuple[Any, Optional[BaseException]]:
+            try:
+                kwargs: dict[str, Any] = {
+                    "model": self.model_name,
+                    "messages": messages,
+                }
+                if use_tools:
+                    kwargs["tools"] = TOOLS
+                if self.config.max_tokens is not None:
+                    kwargs["max_tokens"] = self.config.max_tokens
+                if not self.client:
+                    return None, RuntimeError(
+                        "No LLM client configured. Run /login first."
+                    )
+                stream = self.client.chat.completions.create(**kwargs,stream=True)
+                return stream, None
+            except Exception as exc:
+                return None, exc
 
         response, error = _run_once()
         if error is None:
@@ -578,6 +596,7 @@ class Agent:
         return OpenAI(
             api_key=self.config.api_key,
             base_url=endpoint,
+            
         )
     def check_and_request_permission(self, tool_name: str, target: str, action_details: str) -> bool:
         """Checks if permission is pre-approved, otherwise prompts the user with persistent options."""

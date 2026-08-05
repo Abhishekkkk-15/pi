@@ -1383,6 +1383,65 @@ class ConsoleUI:
                 body = Text(text.strip(), style="dim italic")
             self._emit(self._gutter(GLYPH["star"], ACCENT, prefix + body), gap_before=True)
 
+    def stream_thinking_start(self):
+        """Stop spinner and start streaming agent thoughts."""
+        self.stop_loading()
+        sys.stdout.write("\n✻ Thinking...\n")
+        sys.stdout.flush()
+
+    def stream_thinking_chunk(self, chunk: str):
+        """Write a thought/reasoning token chunk directly."""
+        sys.stdout.write(chunk)
+        sys.stdout.flush()
+
+    def stream_thinking_end(self):
+        """Finish streaming thoughts block."""
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    def stream_content_start(self):
+        """Stop spinner and start streaming content prefix."""
+        self.stop_loading()
+        sys.stdout.write("\n● ")
+        sys.stdout.flush()
+
+    def stream_content_chunk(self, chunk: str):
+        """Write a content token chunk directly."""
+        sys.stdout.write(chunk)
+        sys.stdout.flush()
+
+    def stream_content_end(self):
+        """Finish streaming content block."""
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    def print_step_thinking(self, content: str):
+        """Print step-level thinking summary in a premium panel."""
+        text = content or ""
+        if not text.strip():
+            return
+        with self._pause_loading():
+            body = Text(text.strip(), style="italic cyan")
+            self._emit(
+                self._card(body, title="✻ Thought Step", border="cyan"),
+                gap_before=True
+            )
+
+    def print_step_summary(self, content: str):
+        """Print observations/summary of progress in a premium panel."""
+        text = content or ""
+        if not text.strip():
+            return
+        with self._pause_loading():
+            try:
+                body = Markdown(text.strip())
+            except Exception:
+                body = Text(text.strip(), style="dim")
+            self._emit(
+                self._card(body, title="● Step Summary / Observations", border="magenta"),
+                gap_before=True
+            )
+
     def print_assistant_message(self, message: str, is_code: bool = False):
         """Print assistant response; skips empty content; detects fenced languages."""
         content = message or ""
