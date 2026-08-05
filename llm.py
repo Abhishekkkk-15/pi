@@ -687,9 +687,11 @@ class Agent:
         args = json.loads(function_arguments)
         if tool_name == "read":
             path = args.get("path", "")
+            offset = args.get("offset")
+            limit = args.get("limit")
             if not self.check_and_request_permission(tool_name, path, f"Agent wants to read {path}"):
                 return "User permission denied"
-            return execute_read(path)
+            return execute_read(path, offset=offset, limit=limit)
 
         elif tool_name == "write":
             path = args.get("path", "")

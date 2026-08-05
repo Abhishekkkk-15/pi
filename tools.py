@@ -6,6 +6,7 @@ import threading
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Any
+from typing import Optional
 
 
 SKIP_DIR_NAMES = {
@@ -458,13 +459,21 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read",
-            "description": "Read file contents at the given path.",
+            "description": "Read file contents at the given path. Supports optional offset and limit for paginated reading of large files.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
                         "description": "Relative or absolute file path to read."
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Line number to start reading from (1-indexed, optional)."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of lines to read (optional)."
                     }
                 },
                 "required": ["path"]
