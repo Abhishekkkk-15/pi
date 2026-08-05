@@ -80,33 +80,48 @@ def sanitize_api_messages(raw_messages: list[dict]) -> list[dict]:
 def apply_sliding_window(raw_messages: list[dict], max_history: int = 20) -> list[dict]:
     """
     Applies a sliding window to conversation history:
-    1. Always preserves the System prompt (index 0).
-    2. Keeps the most recent messages up to max_history.
-    3. Aligns the window start to a User turn to avoid breaking tool call contexts.
-    4. Passes the result through sanitize_api_messages to guarantee API compliance.
+    1. Always preserves the System prompt (index 0) if present.
+    2. Always preserves the Compaction Summary user/assistant messages if present.
+    3. Keeps the most recent messages up to max_history.
+    4. Aligns the window start to a User turn to avoid breaking tool call contexts.
+    5. Passes the result through sanitize_api_messages to guarantee API compliance.
     """
     if len(raw_messages) <= max_history:
         return sanitize_api_messages(raw_messages)
 
-    sys_msg = None
-    history = raw_messages
+    prefix_messages = []
+    remaining = list(raw_messages)
 
-    if raw_messages and raw_messages[0].get("role") == "system":
-        sys_msg = raw_messages[0]
-        history = raw_messages[1:]
+    if remaining and remaining[0].get("role") == "system":
+        prefix_messages.append(remaining.pop(0))
 
-    target_count = max_history - (1 if sys_msg else 0)
-    start_idx = max(0, len(history) - target_count)
+    from compaction import SUMMARY_PREFIX
+    if (
+        len(remaining) >= 2
+        and remaining[0].get("role") == "user"
+        and str(remaining[0].get("content", "")).startswith(SUMMARY_PREFIX)
+        and remaining[1].get("role") == "assistant"
+    ):
+        prefix_messages.append(remaining.pop(0))
+        prefix_messages.append(remaining.pop(0))
 
-    orig_start = start_idx
-    while start_idx < len(history) and history[start_idx].get("role") != "user":
-        start_idx += 1
+    target_count = max_history - len(prefix_messages)
+    target_count = max(1, target_count)
 
-    if start_idx >= len(history):
-        start_idx = orig_start
+    if len(remaining) <= target_count:
+        final_messages = prefix_messages + remaining
+    else:
+        start_idx = len(remaining) - target_count
+        orig_start = start_idx
+        while start_idx < len(remaining) and remaining[start_idx].get("role") != "user":
+            start_idx += 1
 
-    window = [sys_msg] + history[start_idx:] if sys_msg else history[start_idx:]
-    return sanitize_api_messages(window)
+        if start_idx >= len(remaining):
+            start_idx = orig_start
+
+        final_messages = prefix_messages + remaining[start_idx:]
+
+    return sanitize_api_messages(final_messages)
 
 
 class Agent:
