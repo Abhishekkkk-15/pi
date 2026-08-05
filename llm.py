@@ -76,6 +76,123 @@ def sanitize_api_messages(raw_messages: list[dict]) -> list[dict]:
     return sanitized
 
 
+def format_tokens(count: int) -> str:
+    """Format token integer into readable string e.g. 128k, 1M."""
+    if count >= 1_000_000:
+        val = count / 1_000_000
+        return f"{val:.1f}M".replace(".0M", "M")
+    if count >= 1_000:
+        val = count / 1_000
+        if val.is_integer():
+            return f"{int(val)}k"
+        return f"{val:.1f}k"
+    return str(count)
+
+
+KNOWN_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    # OpenAI GPT-5 / GPT-5.4 Series
+    "gpt-5.4-mini": 400000,
+    "gpt-5.4": 400000,
+    "gpt-5-mini": 400000,
+    "gpt-5": 400000,
+    "gpt-4.5": 128000,
+    # OpenAI GPT-4 / o Series
+    "gpt-4o": 128000,
+    "gpt-4o-2024-05-13": 128000,
+    "gpt-4o-2024-08-06": 128000,
+    "gpt-4o-2024-11-20": 128000,
+    "gpt-4o-mini": 128000,
+    "gpt-4o-mini-2024-07-18": 128000,
+    "o1": 200000,
+    "o1-preview": 128000,
+    "o1-mini": 128000,
+    "o3-mini": 200000,
+    "gpt-4-turbo": 128000,
+    "gpt-4-turbo-preview": 128000,
+    "gpt-4": 8192,
+    "gpt-4-32k": 32768,
+    "gpt-3.5-turbo": 16385,
+    "gpt-3.5-turbo-16k": 16385,
+    # Mistral
+    "mistral-large-latest": 128000,
+    "mistral-large-2411": 128000,
+    "mistral-small-latest": 32768,
+    "codestral-latest": 32768,
+    "open-mixtral-8x22b": 64000,
+    "open-mistral-nemo": 128000,
+    # Groq / Meta / Anthropic / Google / DeepSeek
+    "llama-3.3-70b-versatile": 128000,
+    "llama-3.1-70b-versatile": 128000,
+    "llama-3.1-8b-instant": 128000,
+    "mixtral-8x7b-32768": 32768,
+    "claude-3-5-sonnet-20241022": 200000,
+    "claude-3-5-haiku-20241022": 200000,
+    "claude-3-opus-20240229": 200000,
+    "gemini-1.5-pro": 1048576,
+    "gemini-1.5-flash": 1048576,
+    "gemini-2.0-flash": 1048576,
+    "deepseek-chat": 64000,
+    "deepseek-coder": 64000,
+    "deepseek-reasoner": 64000,
+}
+
+_live_context_cache: dict[str, int] = {}
+_live_cache_timestamp: float = 0.0
+
+
+def fetch_live_openrouter_models() -> dict[str, int]:
+    """Fetch live context lengths for models from openrouter public models API in real-time."""
+    global _live_context_cache, _live_cache_timestamp
+    import time
+    now = time.time()
+    # Cache in memory for 10 minutes to maintain speed while staying dynamic & real-time
+    if _live_context_cache and (now - _live_cache_timestamp < 600):
+        return _live_context_cache
+
+    import urllib.request
+    try:
+        url = "https://openrouter.ai/api/v1/models"
+        req = urllib.request.Request(url, headers={"User-Agent": "pi-python/1.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            mmap = {}
+            for item in data.get("data", []):
+                mid = str(item.get("id", "")).strip().lower()
+                cl = item.get("context_length")
+                if mid and isinstance(cl, int) and cl > 0:
+                    mmap[mid] = cl
+                    if "/" in mid:
+                        base = mid.split("/")[-1].lower()
+                        mmap[base] = cl
+            _live_context_cache = mmap
+            _live_cache_timestamp = now
+            return _live_context_cache
+    except Exception:
+        return _live_context_cache
+
+
+def fetch_raw_provider_models(
+    base_url: str, api_key: str | None = None
+) -> list[dict[str, Any]]:
+    """Fetch raw un-truncated JSON array from provider's GET {base_url}/models endpoint."""
+    import urllib.request
+    try:
+        url = f"{base_url.rstrip('/')}/models"
+        headers = {"User-Agent": "pi-python/1.0"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if isinstance(data, dict):
+                return data.get("data", [])
+            elif isinstance(data, list):
+                return data
+    except Exception:
+        pass
+    return []
+
+
 class Agent:
     def __init__(self):
         config = Config()
@@ -240,21 +357,110 @@ class Agent:
         model_str = str(self.config.model.value) if hasattr(self.config.model, "value") else str(self.config.model)
         return model_str
 
-    def list_available_models(self) -> list[str]:
-        """Fetch model IDs from the active provider's OpenAI-compatible /models endpoint."""
+    def get_model_context_window(
+        self, model_name: str | None = None, model_obj: Any = None
+    ) -> int:
+        """Dynamically resolve real-time context window limit in tokens for a model."""
+        target = (model_name or self.model_name).strip().lower()
+
+        # 1. Check explicit attributes on raw model object or dict if provided
+        if model_obj is not None:
+            for attr in (
+                "context_length",
+                "context_window",
+                "max_context_length",
+                "max_model_len",
+                "max_input_tokens",
+                "input_tokens",
+            ):
+                val = (
+                    getattr(model_obj, attr, None)
+                    if not isinstance(model_obj, dict)
+                    else model_obj.get(attr)
+                )
+                if isinstance(val, int) and val > 0:
+                    return val
+
+        # 2. Query real-time OpenRouter registry API
+        live_map = fetch_live_openrouter_models()
+        if target in live_map:
+            return live_map[target]
+        for key in sorted(live_map.keys(), key=len, reverse=True):
+            if key in target or target in key:
+                return live_map[key]
+
+        # 3. Check known lookup dict fallback
+        if target in KNOWN_MODEL_CONTEXT_WINDOWS:
+            return KNOWN_MODEL_CONTEXT_WINDOWS[target]
+
+        for key in sorted(KNOWN_MODEL_CONTEXT_WINDOWS.keys(), key=len, reverse=True):
+            if key in target or target in key:
+                return KNOWN_MODEL_CONTEXT_WINDOWS[key]
+
+        # 4. Check regex patterns in model_name (e.g. model-400k, model-1m)
+        import re
+        m_match = re.search(r'(\d+)\s*m\b', target)
+        if m_match:
+            return int(m_match.group(1)) * 1_000_000
+        k_match = re.search(r'(\d+)\s*k\b', target)
+        if k_match:
+            return int(k_match.group(1)) * 1_000
+
+        # Default fallback
+        return 128000
+
+    def list_available_models_info(self) -> list[dict[str, Any]]:
+        """Fetch models real-time with resolved context window metadata."""
         if not self.config.api_key:
             raise RuntimeError("No API key configured. Run /login first.")
         base_url = self.config.base_url or BUILTIN_PROVIDERS.get(
             self.config.provider, {}
         ).get("base_url", "https://api.mistral.ai/v1")
-        client = self.client or OpenAI(api_key=self.config.api_key, base_url=base_url)
-        response = client.models.list()
-        ids = []
-        for m in getattr(response, "data", []) or []:
-            mid = getattr(m, "id", None)
-            if mid:
-                ids.append(str(mid))
-        return sorted(set(ids), key=str.lower)
+
+        # Perform raw HTTP GET request to preserve provider's extra raw JSON fields
+        raw_models = fetch_raw_provider_models(base_url, self.config.api_key)
+
+        results = []
+        seen = set()
+
+        if raw_models:
+            for m in raw_models:
+                mid = m.get("id") if isinstance(m, dict) else getattr(m, "id", None)
+                if mid and str(mid) not in seen:
+                    mid_str = str(mid)
+                    seen.add(mid_str)
+                    cw = self.get_model_context_window(model_name=mid_str, model_obj=m)
+                    results.append(
+                        {
+                            "id": mid_str,
+                            "context_window": cw,
+                            "formatted_context": format_tokens(cw),
+                        }
+                    )
+        else:
+            client = self.client or OpenAI(api_key=self.config.api_key, base_url=base_url)
+            response = client.models.list()
+            for m in getattr(response, "data", []) or []:
+                mid = getattr(m, "id", None)
+                if mid and str(mid) not in seen:
+                    mid_str = str(mid)
+                    seen.add(mid_str)
+                    cw = self.get_model_context_window(model_name=mid_str, model_obj=m)
+                    results.append(
+                        {
+                            "id": mid_str,
+                            "context_window": cw,
+                            "formatted_context": format_tokens(cw),
+                        }
+                    )
+
+        results.sort(key=lambda x: x["id"].lower())
+        return results
+
+    def list_available_models(self) -> list[str]:
+        """Fetch model IDs from the active provider's OpenAI-compatible /models endpoint."""
+        info = self.list_available_models_info()
+        return [item["id"] for item in info]
 
     def apply_provider_runtime(self) -> None:
         """Reload config from auth.json and rebuild the OpenAI client."""
@@ -280,6 +486,7 @@ class Agent:
             response = self._create_completion(
                 messages=[{"role": "user", "content": prompt_str}],
                 use_tools=False,
+                stream_to_ui=False,
             )
             self._record_usage(response)
             content = (response.choices[0].message.content or "").strip()
@@ -380,6 +587,7 @@ class Agent:
             response = self._create_completion(
                 messages=[{"role": "user", "content": prompt}],
                 use_tools=False,
+                stream_to_ui=False,
             )
             self._record_usage(response)
             summary = (response.choices[0].message.content or "").strip()
@@ -418,6 +626,7 @@ class Agent:
         self,
         messages: list[dict],
         use_tools: bool = True,
+        stream_to_ui: bool = True,
     ) -> Any:
         """
         Run chat.completions.create.
@@ -496,28 +705,30 @@ class Agent:
                     # Stream reasoning/thinking
                     reasoning = _get_val(delta, "reasoning_content")
                     if reasoning:
-                        if loading_active:
-                            self.console.stop_loading()
-                            loading_active = False
-                        if not print_thinking_header:
-                            self.console.stream_thinking_start()
-                            print_thinking_header = True
-                        self.console.stream_thinking_chunk(reasoning)
+                        if stream_to_ui:
+                            if loading_active:
+                                self.console.stop_loading()
+                                loading_active = False
+                            if not print_thinking_header:
+                                self.console.stream_thinking_start()
+                                print_thinking_header = True
+                            self.console.stream_thinking_chunk(reasoning)
                         reasoning_parts.append(reasoning)
 
                     # Stream normal response content
                     content = _get_val(delta, "content")
                     if content:
-                        if print_thinking_header:
-                            self.console.stream_thinking_end()
-                            print_thinking_header = False
-                        if loading_active:
-                            self.console.stop_loading()
-                            loading_active = False
-                        if not print_content_header:
-                            self.console.stream_content_start()
-                            print_content_header = True
-                        self.console.stream_content_chunk(content)
+                        if stream_to_ui:
+                            if print_thinking_header:
+                                self.console.stream_thinking_end()
+                                print_thinking_header = False
+                            if loading_active:
+                                self.console.stop_loading()
+                                loading_active = False
+                            if not print_content_header:
+                                self.console.stream_content_start()
+                                print_content_header = True
+                            self.console.stream_content_chunk(content)
                         content_parts.append(content)
 
                     # Stream tool calls (silently buffer arguments, update dynamic loading text)

@@ -450,9 +450,9 @@ class Commands:
             f"Fetching models from {provider} ({agent.config.base_url})...",
             title="Model",
         )
-        models: list[str] = []
+        models_info: list[dict[str, Any]] = []
         try:
-            models = agent.list_available_models()
+            models_info = agent.list_available_models_info()
         except Exception as e:
             console.print_error(
                 f"Failed to list models: {e}\nYou can still enter a model name manually.",
@@ -460,7 +460,7 @@ class Commands:
             )
 
         current = str(agent.config.model)
-        if not models:
+        if not models_info:
             console.print_system_message(
                 "No models listed by the provider — enter a model id manually.",
                 title="Model",
@@ -470,27 +470,43 @@ class Commands:
                 console.print_system_message("Model selection cancelled.", title="Model")
                 return True
         else:
-            picked = console.interactive_pick(
-                models,
-                title=f"Select model ({provider}) — {len(models)} available",
-                current=current if current in models else None,
+            options = []
+            option_to_id = {}
+            current_option = None
+            for info in models_info:
+                mid = info["id"]
+                label = f"{mid}  [{info['formatted_context']} context]"
+                options.append(label)
+                option_to_id[label] = mid
+                if mid == current:
+                    current_option = label
+
+            picked_option = console.interactive_pick(
+                options,
+                title=f"Select model ({provider}) — {len(options)} available",
+                current=current_option,
                 searchable=True,
                 custom_option=CUSTOM,
             )
-            if not picked:
+            if not picked_option:
                 console.print_system_message("Model selection cancelled.", title="Model")
                 return True
-            if picked == CUSTOM:
+            if picked_option == CUSTOM:
                 picked = console.prompt_text("Model name", default=current or "")
                 if not picked:
                     console.print_system_message("Model selection cancelled.", title="Model")
                     return True
+            else:
+                picked = option_to_id.get(picked_option, picked_option.split(" ")[0])
 
         picked = picked.strip()
         upsert_provider_settings(provider, model=picked, make_active=True)
         agent.config.model = picked
+        cw = agent.get_model_context_window(picked)
+        from llm import format_tokens
+
         console.print_system_message(
-            f"Model set to '{picked}' for provider '{provider}'.",
+            f"Model set to '{picked}' for provider '{provider}' ({format_tokens(cw)} context window).",
             title="Model",
         )
         return True
@@ -620,8 +636,9 @@ class Commands:
         return True
 
     def compaction(self) -> bool:
-        """Configure compaction (enabled, token threshold, keep recent messages)"""
+        """Configure compaction (enabled, token threshold in percentage or exact count, keep recent messages)"""
         from config import update_app_settings
+        from llm import format_tokens
 
         agent = self.agent
         console = agent.console
@@ -629,15 +646,20 @@ class Commands:
         at_tokens = agent.config.compact_at_tokens
         keep = agent.config.compact_keep_messages
 
+        cw = agent.get_model_context_window()
+        cw_fmt = format_tokens(cw)
+        pct = round((at_tokens / cw) * 100, 1) if cw > 0 else 75.0
+
         RUN_LABEL = "Run compaction now"
         ENABLED_LABEL = f"Enabled  {'on' if enabled else 'off'}"
-        TOKENS_LABEL = f"Compact at tokens  {at_tokens:,}"
+        TOKENS_LABEL = f"Compact threshold  {at_tokens:,} tokens ({pct}% of {cw_fmt} context)"
         KEEP_LABEL = f"Keep recent messages  {keep}"
 
         console.print_system_message(
             f"Compaction summarizes older turns when context is large.\n"
+            f"Active Model Context Window: {cw_fmt} ({cw:,} tokens)\n"
             f"Enabled: {enabled}\n"
-            f"Threshold: {at_tokens:,} tokens\n"
+            f"Threshold: {at_tokens:,} tokens (~{pct}% of context)\n"
             f"Keep raw: last {keep} messages\n"
             "Full history stays on disk; only the model context is compacted.\n"
             "Tip: /compact forces a run immediately.",
@@ -669,14 +691,43 @@ class Commands:
                 kwargs["compaction_enabled"] = choice == "on"
 
             elif picked == TOKENS_LABEL:
-                raw = console.prompt_text(
-                    "Compact when working context reaches (tokens, >= 1000)",
-                    default=str(at_tokens),
+                MODE_PCT = f"Set by Percentage (%)  [Active model: {cw_fmt} context]"
+                MODE_EXACT = "Set by Exact Token Count"
+                mode = console.interactive_pick(
+                    [MODE_PCT, MODE_EXACT],
+                    title=f"Set Compaction Threshold (Context: {cw_fmt})",
                 )
-                if raw is None:
+                if not mode:
                     console.print_system_message("Cancelled.", title="Compaction")
                     return True
-                kwargs["compact_at_tokens"] = int(raw.strip().replace(",", ""))
+
+                if mode == MODE_PCT:
+                    raw_pct = console.prompt_text(
+                        f"Enter compaction threshold percentage (1% - 95% of {cw_fmt})",
+                        default=str(int(pct)),
+                    )
+                    if raw_pct is None:
+                        console.print_system_message("Cancelled.", title="Compaction")
+                        return True
+                    clean_pct = float(raw_pct.strip().replace("%", ""))
+                    if not (1 <= clean_pct <= 95):
+                        raise ValueError("Percentage must be between 1% and 95%.")
+                    target_tokens = int(cw * (clean_pct / 100.0))
+                    target_tokens = max(1000, target_tokens)
+                    kwargs["compact_at_tokens"] = target_tokens
+                    console.print_system_message(
+                        f"Calculated threshold: {clean_pct}% of {cw_fmt} = {target_tokens:,} tokens.",
+                        title="Threshold Set",
+                    )
+                else:
+                    raw = console.prompt_text(
+                        "Compact when working context reaches (tokens, >= 1000)",
+                        default=str(at_tokens),
+                    )
+                    if raw is None:
+                        console.print_system_message("Cancelled.", title="Compaction")
+                        return True
+                    kwargs["compact_at_tokens"] = int(raw.strip().replace(",", ""))
 
             elif picked == KEEP_LABEL:
                 raw = console.prompt_text(
@@ -694,9 +745,11 @@ class Commands:
             return True
 
         agent.config.apply_app_settings(settings)
+        new_at_tokens = agent.config.compact_at_tokens
+        new_pct = round((new_at_tokens / cw) * 100, 1) if cw > 0 else 75.0
         console.print_system_message(
             f"Enabled: {agent.config.compaction_enabled}\n"
-            f"Threshold: {agent.config.compact_at_tokens:,} tokens\n"
+            f"Threshold: {new_at_tokens:,} tokens (~{new_pct}% of {cw_fmt} context)\n"
             f"Keep raw: last {agent.config.compact_keep_messages} messages\n"
             "Saved to auth.json (app_settings).",
             title="Compaction",
