@@ -603,6 +603,8 @@ class Commands:
 
     def compact(self) -> bool:
         """Run compaction now (manual), even if under the auto threshold"""
+        from llm import format_tokens
+
         agent = self.agent
         console = agent.console
         if not agent.config.api_key:
