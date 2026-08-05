@@ -184,6 +184,8 @@ class Agent:
                 pd = usage.get("prompt_tokens_details")
                 if isinstance(pd, dict):
                     cached = int(pd.get("cached_tokens") or 0)
+                elif pd is not None:
+                    cached = int(getattr(pd, "cached_tokens", 0) or 0)
             if not cached:
                 cached = int(usage.get("cache_read_input_tokens") or 0)
         else:
@@ -194,7 +196,9 @@ class Agent:
             cached = int(getattr(usage, "cached_tokens", 0) or 0)
             if not cached:
                 prompt_details = getattr(usage, "prompt_tokens_details", None)
-                if prompt_details is not None:
+                if isinstance(prompt_details, dict):
+                    cached = int(prompt_details.get("cached_tokens") or 0)
+                elif prompt_details is not None:
                     cached = int(getattr(prompt_details, "cached_tokens", 0) or 0)
             if not cached:
                 # Try Anthropic-style attributes
@@ -451,8 +455,7 @@ class Agent:
                     )
                 
                 kwargs["stream"] = True
-                if self.config.provider in ("openai", "groq"):
-                    kwargs["stream_options"] = {"include_usage": True}
+                kwargs["stream_options"] = {"include_usage": True}
 
                 try:
                     stream = self.client.chat.completions.create(**kwargs)
