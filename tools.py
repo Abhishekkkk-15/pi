@@ -72,7 +72,9 @@ def execute_read(path: str) -> str:
         if not filepath.is_file():
             return f"Error: '{path}' is a directory, not a file."
         
-        return filepath.read_text(encoding="utf-8")
+        content = filepath.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        return "\n".join(f"{i + 1}: {line}" for i, line in enumerate(lines))
     except Exception as e:
         return f"Error reading file '{path}': {str(e)}"
 
