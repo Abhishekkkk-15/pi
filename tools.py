@@ -96,8 +96,8 @@ def execute_write(path: str, content: str) -> str:
 
 def execute_edit(path: str, edits: List[Dict[str, str]]) -> str:
     """
-    Applies exact search-and-replace edits to a file.
-    Note: All edits operate on the original file content simultaneously.
+    Applies parallel exact search-and-replace edits to a file.
+    All edits are matched against the original file state before any modifications occur.
     """
     try:
         filepath = Path(path)
@@ -105,40 +105,66 @@ def execute_edit(path: str, edits: List[Dict[str, str]]) -> str:
             return f"Error: File '{path}' does not exist."
 
         content = filepath.read_text(encoding="utf-8")
-        old_lines = 0
-        new_lines = 0
-
+        # 1. Normalize CRLF to LF for matching consistency
+        normalized_content = content.replace("\r\n", "\n")
+        
+        matches = []
         for i, edit in enumerate(edits):
-            old_text = edit.get("oldText", "")
-            new_text = edit.get("newText", "")
+            old_text = (edit.get("oldText", "") or "").replace("\r\n", "\n")
+            new_text = (edit.get("newText", "") or "").replace("\r\n", "\n")
 
-            if old_text not in content:
+            if not old_text:
+                return f"Error in edit {i + 1}: 'oldText' cannot be empty."
+
+            # Check uniqueness in original content
+            occurrences = normalized_content.count(old_text)
+            if occurrences == 0:
                 return (
                     f"Error in edit entry {i + 1}: Could not find exact match for 'oldText'.\n"
                     f"Target text was:\n{old_text}"
                 )
-
-            # Check for multiple occurrences
-            occurrences = content.count(old_text)
             if occurrences > 1:
                 return (
                     f"Error in edit entry {i + 1}: 'oldText' matched {occurrences} locations. "
-                    "Provide more surrounding context in 'oldText' to make it unique."
+                    "Provide more surrounding context to make it unique."
                 )
 
-            old_lines += len(old_text.splitlines()) if old_text else 0
-            new_lines += len(new_text.splitlines()) if new_text else 0
-            # Replace the exact block
-            content = content.replace(old_text, new_text, 1)
+            start_idx = normalized_content.index(old_text)
+            end_idx = start_idx + len(old_text)
+            matches.append({
+                "index": i,
+                "start": start_idx,
+                "end": end_idx,
+                "new_text": new_text,
+                "old_text": old_text,
+            })
 
-        filepath.write_text(content, encoding="utf-8")
-        return (
-            f"Applied {len(edits)} edit(s) to '{path}' - "
-            f"-{old_lines}/+{new_lines} lines."
-        )
+        # 2. Check for overlapping edit regions
+        matches.sort(key=lambda m: m["start"])
+        for i in range(1, len(matches)):
+            prev = matches[i - 1]
+            curr = matches[i]
+            if prev["end"] > curr["start"]:
+                return (
+                    f"Error: Edits {prev['index'] + 1} and {curr['index'] + 1} overlap in '{path}'. "
+                    "Merge them into a single replacement block."
+                )
+
+        # 3. Apply edits in reverse order (highest start index down to 0)
+        new_content = normalized_content
+        for m in reversed(matches):
+            new_content = new_content[:m["start"]] + m["new_text"] + new_content[m["end"]:]
+
+        # Restore CRLF line endings if original file used CRLF
+        if "\r\n" in content:
+            new_content = new_content.replace("\n", "\r\n")
+
+        filepath.write_text(new_content, encoding="utf-8")
+        return f"Applied {len(edits)} edit(s) to '{path}' successfully."
 
     except Exception as e:
         return f"Error editing file '{path}': {str(e)}"
+
 
 
 def execute_bash(command: str, timeout: int = 30, is_background: bool = False) -> str:
