@@ -77,53 +77,6 @@ def sanitize_api_messages(raw_messages: list[dict]) -> list[dict]:
     return sanitized
 
 
-def apply_sliding_window(raw_messages: list[dict], max_history: int = 20) -> list[dict]:
-    """
-    Applies a sliding window to conversation history:
-    1. Always preserves the System prompt (index 0) if present.
-    2. Always preserves the Compaction Summary user/assistant messages if present.
-    3. Keeps the most recent messages up to max_history.
-    4. Aligns the window start to a User turn to avoid breaking tool call contexts.
-    5. Passes the result through sanitize_api_messages to guarantee API compliance.
-    """
-    if len(raw_messages) <= max_history:
-        return sanitize_api_messages(raw_messages)
-
-    prefix_messages = []
-    remaining = list(raw_messages)
-
-    if remaining and remaining[0].get("role") == "system":
-        prefix_messages.append(remaining.pop(0))
-
-    from compaction import SUMMARY_PREFIX
-    if (
-        len(remaining) >= 2
-        and remaining[0].get("role") == "user"
-        and str(remaining[0].get("content", "")).startswith(SUMMARY_PREFIX)
-        and remaining[1].get("role") == "assistant"
-    ):
-        prefix_messages.append(remaining.pop(0))
-        prefix_messages.append(remaining.pop(0))
-
-    target_count = max_history - len(prefix_messages)
-    target_count = max(1, target_count)
-
-    if len(remaining) <= target_count:
-        final_messages = prefix_messages + remaining
-    else:
-        start_idx = len(remaining) - target_count
-        orig_start = start_idx
-        while start_idx < len(remaining) and remaining[start_idx].get("role") != "user":
-            start_idx += 1
-
-        if start_idx >= len(remaining):
-            start_idx = orig_start
-
-        final_messages = prefix_messages + remaining[start_idx:]
-
-    return sanitize_api_messages(final_messages)
-
-
 class Agent:
     def __init__(self):
         config = Config()
@@ -132,7 +85,7 @@ class Agent:
         self.client = self.create_model()
         self.prompt = prompts.Prompt()
         self.memory: Memory = Memory() 
-        self.memory.messages = [Message(role=Role.SYSTEM, content=self.prompt.prompts[0])]
+        self.memory.messages = [Message(role=Role.SYSTEM, content=self.prompt.get_system_prompt())]
         self._pending_prompt_tokens = 0
         self._pending_completion_tokens = 0
         self._pending_total_tokens = 0
@@ -150,7 +103,7 @@ class Agent:
         self._pending_total_tokens = 0
         self._pending_cached_tokens = 0
         self.memory.messages = [
-            Message(role=Role.SYSTEM, content=self.prompt.raw_system_prompt)
+            Message(role=Role.SYSTEM, content=self.prompt.get_system_prompt())
         ]
         # Keep manual skill preference across /new; re-apply into the fresh system prompt
         if self.manual_skill_names:
@@ -158,11 +111,12 @@ class Agent:
 
     def apply_active_skills(self, skill_names: list[str], *, announce: bool = True) -> None:
         """Load skills into the system prompt (or reset to base when empty)."""
+        workspace = self.memory.session.workspace if (self.memory and self.memory.session) else None
         if skill_names:
             active_skills = Skills.load_many(skill_names)
-            sys_prompt = self.prompt.get_system_prompt(active_skills)
+            sys_prompt = self.prompt.get_system_prompt(active_skills=active_skills, cwd=workspace)
         else:
-            sys_prompt = self.prompt.raw_system_prompt
+            sys_prompt = self.prompt.get_system_prompt(cwd=workspace)
 
         if self.memory.messages and self.memory.messages[0].role == Role.SYSTEM:
             self.memory.messages[0].content = sys_prompt
@@ -352,13 +306,11 @@ class Agent:
         )
 
     def _build_api_messages(self) -> list[dict]:
-        """System + optional summary + recent raw messages, then sliding window."""
+        """System + optional summary + recent raw messages."""
         comp = self._compaction()
         working = comp.working_messages(self.memory.messages, self.memory.session)
         raw_dicts = [m.to_dict() for m in working]
-        return apply_sliding_window(
-            raw_dicts, max_history=self.config.max_history_messages
-        )
+        return sanitize_api_messages(raw_dicts)
 
     def _maybe_compact(self) -> None:
         """Auto path: only runs when enabled and over threshold."""

@@ -51,6 +51,9 @@ def main():
                 if agent.memory.session is None:
                     session = agent.memory.init_session(user_query, initial_messages=agent.memory.messages) 
                     agent.current_session = session  # type: ignore
+                    if agent.memory.messages and agent.memory.messages[0].role == Role.SYSTEM:
+                        agent.memory.messages[0].content = agent.prompt.get_system_prompt(cwd=str(session.workspace))
+                        agent.memory.write_to_jsonl(session.history_path, agent.memory.messages, mode="w")
                     agent._flush_pending_usage()
                     agent.console.clear_screen()
                     agent.console.print_welcome(
