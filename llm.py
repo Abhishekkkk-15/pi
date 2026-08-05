@@ -121,6 +121,7 @@ class Agent:
         self._pending_prompt_tokens = 0
         self._pending_completion_tokens = 0
         self._pending_total_tokens = 0
+        self._pending_cached_tokens = 0
         # None = auto skill selection via LLM; list = manual (/skills), skip LLM picker
         self.manual_skill_names: Optional[list[str]] = None
 
@@ -132,6 +133,7 @@ class Agent:
         self._pending_prompt_tokens = 0
         self._pending_completion_tokens = 0
         self._pending_total_tokens = 0
+        self._pending_cached_tokens = 0
         self.memory.messages = [
             Message(role=Role.SYSTEM, content=self.prompt.raw_system_prompt)
         ]
@@ -182,11 +184,13 @@ class Agent:
             self._pending_total_tokens
             or self._pending_prompt_tokens
             or self._pending_completion_tokens
+            or self._pending_cached_tokens
         ):
             return
         session.prompt_tokens += self._pending_prompt_tokens
         session.completion_tokens += self._pending_completion_tokens
         session.total_tokens += self._pending_total_tokens
+        session.cached_tokens += self._pending_cached_tokens
         session.estimated_cost_usd += estimate_cost(
             self._pending_prompt_tokens,
             self._pending_completion_tokens,
@@ -196,6 +200,7 @@ class Agent:
         self._pending_prompt_tokens = 0
         self._pending_completion_tokens = 0
         self._pending_total_tokens = 0
+        self._pending_cached_tokens = 0
         self._persist_session_usage()
 
     def _record_usage(self, response: Any) -> None:
@@ -205,17 +210,28 @@ class Agent:
         prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
         completion = int(getattr(usage, "completion_tokens", 0) or 0)
         total = int(getattr(usage, "total_tokens", 0) or (prompt + completion))
-        if prompt == 0 and completion == 0 and total == 0:
+        
+        cached = 0
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        if prompt_details is not None:
+            cached = int(getattr(prompt_details, "cached_tokens", 0) or 0)
+        if not cached:
+            # Try Anthropic-style attributes
+            cached = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+
+        if prompt == 0 and completion == 0 and total == 0 and cached == 0:
             return
         session = self.memory.session
         if session is None:
             self._pending_prompt_tokens += prompt
             self._pending_completion_tokens += completion
             self._pending_total_tokens += total
+            self._pending_cached_tokens += cached
             return
         session.prompt_tokens += prompt
         session.completion_tokens += completion
         session.total_tokens += total
+        session.cached_tokens += cached
         session.estimated_cost_usd += estimate_cost(
             prompt,
             completion,

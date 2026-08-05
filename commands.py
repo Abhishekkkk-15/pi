@@ -826,7 +826,7 @@ class Commands:
         )
         api_line = (
             f"API-reported (session metadata): {session.total_tokens:,} "
-            f"(in {session.prompt_tokens:,} / out {session.completion_tokens:,})"
+            f"(in {session.prompt_tokens:,} / out {session.completion_tokens:,} / cached {session.cached_tokens:,})"
         )
         console.print_system_message(
             f"Session: {session.title}\n"

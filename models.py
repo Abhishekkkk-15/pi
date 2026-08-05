@@ -88,6 +88,7 @@ class Session:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    cached_tokens: int = 0
     estimated_cost_usd: float = 0.0
     # Compaction: summary of messages[1:compacted_until]; recent tail stays raw
     compaction_summary: str = ""

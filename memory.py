@@ -120,6 +120,7 @@ class Memory:
                         prompt_tokens=int(data.get("prompt_tokens", 0) or 0),
                         completion_tokens=int(data.get("completion_tokens", 0) or 0),
                         total_tokens=int(data.get("total_tokens", 0) or 0),
+                        cached_tokens=int(data.get("cached_tokens", 0) or 0),
                         estimated_cost_usd=float(data.get("estimated_cost_usd", 0.0) or 0.0),
                         compaction_summary=str(data.get("compaction_summary", "") or ""),
                         compacted_until=int(data.get("compacted_until", 0) or 0),
