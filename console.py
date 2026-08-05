@@ -302,10 +302,7 @@ class TimedStatus:
         elapsed = int(time.time() - self._start)
         label = Text()
         label.append(f"{self.message} ", style=ACCENT)
-        if "ESC" in self.message or "esc" in self.message:
-            label.append(f"({elapsed}s)", style="dim")
-        else:
-            label.append(f"({elapsed}s {GLYPH['dot']} esc to interrupt)", style="dim")
+        label.append(f"({elapsed}s)", style="dim")
         self._spinner.text = label
         yield self._spinner
 
@@ -1515,7 +1512,6 @@ class ConsoleUI:
         hints = Text()
         hints.append("  /help", style=ACCENT)
         hints.append(" for commands", style="dim")
-        hints.append(f"   {GLYPH['dot']} esc to interrupt", style="dim")
         hints.append(f"   {GLYPH['dot']} ctrl+j for newline", style="dim")
         self.console.print(hints)
         self.console.print()

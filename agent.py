@@ -3,7 +3,6 @@ import llm
 from models import Models, Message, Role
 from rich.traceback import install
 from console import get_console
-from interrupt import AgentInterrupted
 from commands import Commands
 
 install(show_locals=True)
@@ -47,7 +46,7 @@ def main():
                 agent.console.print_error("You are currently unauthenticated. Run /login to configure your provider API key before sending tasks.")
                 continue
             # Show loading indicator
-            with agent.console.print_loading("Processing your request... (ESC to stop)"):
+            with agent.console.print_loading("Processing your request..."):
                 if agent.memory.session is None:
                     session = agent.memory.init_session(user_query, initial_messages=agent.memory.messages) 
                     agent.current_session = session  # type: ignore
@@ -86,10 +85,6 @@ def main():
             # At the prompt: exit. During a turn, Agent.chat already handled interrupt.
             agent.console.print_system_message("Goodbye!", "Exit")
             break
-        except AgentInterrupted:
-            agent.console.print_separator()
-            agent.print_session_usage()
-            continue
         except Exception as e:
             agent.console.print_error(f"An error occurred: {str(e)}")
             # Persist unexpected runtime errors into the active session history

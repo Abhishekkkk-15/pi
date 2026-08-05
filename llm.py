@@ -16,7 +16,6 @@ import threading
 from skills import Skills
 from permissions import PermissionManager, PermissionDecision
 from typing import Any, Optional
-from interrupt import AgentInterrupted, interrupt_controller
 from compaction import Compaction
 from history_stub import (
     age_out_large_payloads,
@@ -261,7 +260,6 @@ class Agent:
         )
 
         try:
-            interrupt_controller.check()
             response = self._create_completion(
                 messages=[{"role": "user", "content": prompt_str}],
                 use_tools=False,
@@ -275,8 +273,6 @@ class Agent:
                 if isinstance(parsed, list):
                     return [s for s in parsed if isinstance(s, str) and s in available]
             return []
-        except AgentInterrupted:
-            raise
         except Exception:
             q_lower = user_query.lower()
             return [s for s in available if s.lower() in q_lower]
@@ -353,7 +349,6 @@ class Agent:
             )
         segment, new_until, keep_used = planned
 
-        interrupt_controller.check()
         shrink_note = (
             f", keep shrunk {self.config.compact_keep_messages}→{keep_used}"
             if keep_used < self.config.compact_keep_messages
@@ -371,8 +366,6 @@ class Agent:
             )
             self._record_usage(response)
             summary = (response.choices[0].message.content or "").strip()
-        except AgentInterrupted:
-            raise
         except Exception as e:
             self.console.print_error(
                 f"Compaction failed: {e}",
@@ -404,65 +397,13 @@ class Agent:
         self._append_message(err_msg)
         return err_msg
 
-    def _finalize_pending_tool_calls(self) -> None:
-        """
-        If the last assistant turn requested tools but some responses are missing
-        (e.g. interrupted mid-loop), write placeholder tool messages so history
-        stays valid for the next API call.
-        """
-        messages = self.memory.messages
-        for i in range(len(messages) - 1, -1, -1):
-            msg = messages[i]
-            if msg.role == Role.ASSISTANT and getattr(msg, "tool_calls", None):
-                expected_ids: list[str] = []
-                for tc in msg.tool_calls or []:
-                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
-                    if tc_id:
-                        expected_ids.append(tc_id)
-
-                answered: set[str] = set()
-                for later in messages[i + 1 :]:
-                    if later.role != Role.TOOL:
-                        break
-                    tid = getattr(later, "tool_call_id", None)
-                    if tid:
-                        answered.add(tid)
-
-                for t_id in expected_ids:
-                    if t_id not in answered:
-                        self._append_message(
-                            Message(
-                                role=Role.TOOL,
-                                content="Tool execution was interrupted by the user.",
-                                tool_call_id=t_id,
-                            )
-                        )
-                return
-            if msg.role == Role.USER:
-                return
-
-    def _handle_interrupt(self) -> None:
-        """Persist interrupt marker and notify the user."""
-        self._finalize_pending_tool_calls()
-        interrupt_msg = Message(
-            role=Role.USER,
-            content="[Interrupted] Execution stopped by user.",
-        )
-        self._append_message(interrupt_msg)
-        self.console.stop_loading()
-        self.console.print_system_message(
-            "Stopped current execution. Press Enter for a new task.",
-            title="Interrupted",
-        )
-
     def _create_completion(
         self,
         messages: list[dict],
         use_tools: bool = True,
     ) -> Any:
         """
-        Run chat.completions.create in a worker thread so ESC can interrupt
-        while waiting on the network response.
+        Run chat.completions.create.
         On HTTP 429, rotate to the secondary API key (if configured) and retry once.
         """
         from config import rotate_provider_key
@@ -481,34 +422,23 @@ class Agent:
             return "rate limit" in msg or "429" in msg
 
         def _run_once() -> tuple[Any, Optional[BaseException]]:
-            result: dict[str, Any] = {"response": None, "error": None}
-
-            def _run() -> None:
-                try:
-                    kwargs: dict[str, Any] = {
-                        "model": self.model_name,
-                        "messages": messages,
-                    }
-                    if use_tools:
-                        kwargs["tools"] = TOOLS
-                    if self.config.max_tokens is not None:
-                        kwargs["max_tokens"] = self.config.max_tokens
-                    if not self.client:
-                        result["error"] = RuntimeError(
-                            "No LLM client configured. Run /login first."
-                        )
-                        return
-                    result["response"] = self.client.chat.completions.create(**kwargs)
-                except Exception as exc:
-                    result["error"] = exc
-
-            worker = threading.Thread(target=_run, name="llm-completion", daemon=True)
-            worker.start()
-            while worker.is_alive():
-                if interrupt_controller.interrupted:
-                    raise AgentInterrupted("Execution stopped by user")
-                worker.join(timeout=0.1)
-            return result["response"], result["error"]
+            try:
+                kwargs: dict[str, Any] = {
+                    "model": self.model_name,
+                    "messages": messages,
+                }
+                if use_tools:
+                    kwargs["tools"] = TOOLS
+                if self.config.max_tokens is not None:
+                    kwargs["max_tokens"] = self.config.max_tokens
+                if not self.client:
+                    return None, RuntimeError(
+                        "No LLM client configured. Run /login first."
+                    )
+                response = self.client.chat.completions.create(**kwargs)
+                return response, None
+            except Exception as exc:
+                return None, exc
 
         response, error = _run_once()
         if error is None:
@@ -529,12 +459,10 @@ class Agent:
         raise error
 
     def chat(self, user_query: str) -> Optional[Any]:
-        interrupt_controller.start()
         try:
             # Skills: manual (/skills) skips the LLM skill-selection call
             available_skills = Skills.names()
             if available_skills:
-                interrupt_controller.check()
                 if self.manual_skill_names is not None:
                     selected_names = [
                         n for n in self.manual_skill_names if n in available_skills
@@ -555,14 +483,11 @@ class Agent:
             self._append_message(user_msg)
 
             while True:
-                interrupt_controller.check()
                 self._maybe_compact()
                 api_messages = self._build_api_messages()
 
                 try:
                     res = self._create_completion(api_messages, use_tools=True)
-                except AgentInterrupted:
-                    raise
                 except Exception as e:
                     self._record_error(e, title="LLM Error")
                     return None
@@ -602,14 +527,11 @@ class Agent:
                 if llm_res.message.tool_calls:  # type: ignore
                     history_dirty = False
                     for tool in llm_res.message.tool_calls:  # type: ignore
-                        interrupt_controller.check()
                         tool_name = tool.function.name  # type: ignore
                         tool_arguments = tool.function.arguments  # type: ignore
                         self.console.print_tool_call(tool_name, tool_arguments)  # type: ignore
                         try:
                             fn_output = self.dispatch_tool_call(tool_name, tool_arguments)  # type: ignore
-                        except AgentInterrupted:
-                            raise
                         except Exception as e:
                             fn_output = f"Error executing tool {tool_name}: {str(e)}"
                             self.console.print_error(fn_output, title="Tool Error")
@@ -639,15 +561,8 @@ class Agent:
                         self._rewrite_session_history()
                 else:
                     return res.choices[0]
-        except AgentInterrupted:
-            self._handle_interrupt()
-            return None
         except KeyboardInterrupt:
-            interrupt_controller.trigger()
-            self._handle_interrupt()
             return None
-        finally:
-            interrupt_controller.stop()
 
     def send(self, user_query):
         return self.chat(user_query)
@@ -669,13 +584,7 @@ class Agent:
         if PermissionManager.check_permission(self.memory.session, tool_name, target, self.config.autonomous_risk):
             return True
 
-        # Pause ESC capture so the permission prompt receives keystrokes
-        interrupt_controller.pause()
-        try:
-            interrupt_controller.check()
-            choice = self.console.confirm_permission_extended(tool_name, target, action_details)
-        finally:
-            interrupt_controller.resume()
+        choice = self.console.confirm_permission_extended(tool_name, target, action_details)
 
         if choice in (PermissionDecision.ALLOW_ONCE, PermissionDecision.ALWAYS_TOOL, PermissionDecision.ALWAYS_TARGET, PermissionDecision.ALWAYS_ALL):
             if choice != PermissionDecision.ALLOW_ONCE and self.memory and self.memory.session:
