@@ -577,6 +577,15 @@ class Agent:
                 self._record_usage(res)
                 llm_res = res.choices[0]
 
+                # Print internal thinking/reasoning if present (e.g. from reasoning models)
+                reasoning = getattr(llm_res.message, "reasoning_content", None)
+                if reasoning:
+                    self.console.print_thinking(reasoning)
+
+                # Print explaining/planning text before tool execution if tools are present
+                if llm_res.message.tool_calls and llm_res.message.content:
+                    self.console.print_assistant_message(llm_res.message.content)
+
                 tool_calls_raw = llm_res.message.tool_calls
                 if tool_calls_raw:
                     tool_calls_dicts = [tc.model_dump() for tc in tool_calls_raw]

@@ -63,8 +63,11 @@ def _kill_process_tree(pid: int):
         pass
 
 
-def execute_read(path: str) -> str:
-    """Reads and returns the contents of a text file."""
+DEFAULT_MAX_LINES = 1000
+DEFAULT_MAX_BYTES = 50 * 1024  # 50KB
+
+def execute_read(path: str, offset: Optional[int] = None, limit: Optional[int] = None) -> str:
+    """Reads and returns the contents of a text file, supporting offset and limit, with line formatting and truncation limits."""
     try:
         filepath = Path(path)
         if not filepath.exists():
@@ -72,9 +75,64 @@ def execute_read(path: str) -> str:
         if not filepath.is_file():
             return f"Error: '{path}' is a directory, not a file."
         
-        content = filepath.read_text(encoding="utf-8")
-        lines = content.splitlines()
-        return "\n".join(f"{i + 1}: {line}" for i, line in enumerate(lines))
+        try:
+            content = filepath.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return f"Error: File '{path}' appears to be binary and not decodable as UTF-8 text."
+
+        all_lines = content.splitlines()
+        total_lines = len(all_lines)
+
+        # Convert from 1-indexed input to 0-indexed array access
+        start_line = max(0, (offset - 1) if offset else 0)
+        if start_line >= total_lines and total_lines > 0:
+            return f"Error: Offset {offset} is beyond end of file ({total_lines} lines total)"
+
+        if limit is not None:
+            end_line = min(start_line + limit, total_lines)
+            selected_lines = all_lines[start_line:end_line]
+        else:
+            selected_lines = all_lines[start_line:]
+
+        # Truncate content if it exceeds line or byte limits
+        truncated_lines = []
+        bytes_accumulated = 0
+        truncated = False
+        truncated_by = None
+        
+        for idx, line in enumerate(selected_lines):
+            formatted_line = f"{start_line + idx + 1}: {line}"
+            line_bytes = len(formatted_line.encode("utf-8")) + 1  # +1 for newline
+            
+            if len(truncated_lines) >= DEFAULT_MAX_LINES:
+                truncated = True
+                truncated_by = "lines"
+                break
+                
+            if bytes_accumulated + line_bytes > DEFAULT_MAX_BYTES:
+                truncated = True
+                truncated_by = "bytes"
+                break
+                
+            truncated_lines.append(formatted_line)
+            bytes_accumulated += line_bytes
+
+        output_text = "\n".join(truncated_lines)
+        output_lines_count = len(truncated_lines)
+        end_line_display = start_line + output_lines_count
+
+        if truncated:
+            next_offset = end_line_display + 1
+            if truncated_by == "lines":
+                output_text += f"\n\n[Truncated: showing {output_lines_count} lines of {total_lines}. Use offset={next_offset} to continue.]"
+            else:
+                output_text += f"\n\n[Truncated: showing {output_lines_count} lines of {total_lines} ({DEFAULT_MAX_BYTES // 1024}KB limit). Use offset={next_offset} to continue.]"
+        elif limit is not None and start_line + limit < total_lines:
+            remaining = total_lines - (start_line + limit)
+            next_offset = start_line + limit + 1
+            output_text += f"\n\n[{remaining} more lines in file. Use offset={next_offset} to continue.]"
+
+        return output_text
     except Exception as e:
         return f"Error reading file '{path}': {str(e)}"
 

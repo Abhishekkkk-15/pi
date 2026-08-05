@@ -1372,6 +1372,20 @@ class ConsoleUI:
             gap_before=True,
         )
 
+    def print_thinking(self, content: str):
+        """Print agent thoughts (dimmed, italicized, under a Thinking style)."""
+        text = content or ""
+        if not text.strip():
+            return
+        with self._pause_loading():
+            # Apply styling to make reasoning text stand out as internal thoughts
+            prefix = Text("Thinking...\n", style="bold italic cyan")
+            try:
+                body = Markdown(text.strip())
+            except Exception:
+                body = Text(text.strip(), style="dim italic")
+            self._emit(self._gutter(GLYPH["star"], ACCENT, prefix + body), gap_before=True)
+
     def print_assistant_message(self, message: str, is_code: bool = False):
         """Print assistant response; skips empty content; detects fenced languages."""
         content = message or ""
