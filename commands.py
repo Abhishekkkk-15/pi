@@ -513,10 +513,24 @@ class Commands:
         upsert_provider_settings(provider, model=picked, make_active=True)
         agent.config.model = picked
         cw = agent.get_model_context_window(picked)
-        from llm import format_tokens
+        from llm import format_tokens, fetch_live_model_pricing
+        from config import update_app_settings
+
+        # Try to resolve real-time pricing for the model
+        in_price, out_price = fetch_live_model_pricing(
+            provider, picked, agent.config.api_key, agent.config.base_url
+        )
+        pricing_msg = ""
+        if in_price is not None and out_price is not None:
+            settings = update_app_settings(
+                input_price_per_mtok=in_price,
+                output_price_per_mtok=out_price,
+            )
+            agent.config.apply_app_settings(settings)
+            pricing_msg = f"\nLive pricing resolved and updated: Input ${in_price:.4f} / MTok, Output ${out_price:.4f} / MTok"
 
         console.print_system_message(
-            f"Model set to '{picked}' for provider '{provider}' ({format_tokens(cw)} context window).",
+            f"Model set to '{picked}' for provider '{provider}' ({format_tokens(cw)} context window).{pricing_msg}",
             title="Model",
         )
         return True
@@ -808,6 +822,7 @@ class Commands:
     def prices(self) -> bool:
         """Set estimated input/output USD price per million tokens"""
         from config import update_app_settings
+        from llm import fetch_live_model_pricing
 
         agent = self.agent
         console = agent.console
@@ -816,14 +831,53 @@ class Commands:
 
         INPUT_LABEL = f"Input  ${inp:.4f} / MTok"
         OUTPUT_LABEL = f"Output ${out:.4f} / MTok"
-        BOTH_LABEL = "Edit both"
+        BOTH_LABEL = "Edit both manually"
+        FETCH_LABEL = f"Fetch real-time prices for '{agent.config.model}'"
 
         picked = console.interactive_pick(
-            [INPUT_LABEL, OUTPUT_LABEL, BOTH_LABEL],
+            [FETCH_LABEL, INPUT_LABEL, OUTPUT_LABEL, BOTH_LABEL],
             title="Cost estimate rates ($ per million tokens)",
         )
         if not picked:
             console.print_system_message("Cancelled.", title="Prices")
+            return True
+
+        if picked == FETCH_LABEL:
+            with console.print_loading("Querying live pricing API..."):
+                in_price, out_price = fetch_live_model_pricing(
+                    agent.config.provider,
+                    str(agent.config.model),
+                    agent.config.api_key,
+                    agent.config.base_url,
+                )
+            if in_price is None or out_price is None:
+                console.print_error(
+                    f"Could not resolve real-time pricing for model '{agent.config.model}' from the APIs.\n"
+                    "Please configure rates manually.",
+                    title="Prices",
+                )
+                return True
+
+            confirm = console.interactive_pick(
+                [f"Yes, set to Input: ${in_price:.4f}, Output: ${out_price:.4f}", "No, cancel"],
+                title="Update model pricing rates?",
+            )
+            if confirm != f"Yes, set to Input: ${in_price:.4f}, Output: ${out_price:.4f}":
+                console.print_system_message("Cancelled.", title="Prices")
+                return True
+
+            settings = update_app_settings(
+                input_price_per_mtok=in_price,
+                output_price_per_mtok=out_price,
+            )
+            agent.config.apply_app_settings(settings)
+            console.print_system_message(
+                f"Updated pricing rates for '{agent.config.model}':\n"
+                f"Input:  ${in_price:.4f} / MTok\n"
+                f"Output: ${out_price:.4f} / MTok\n"
+                "Saved to auth.json (app_settings).",
+                title="Prices",
+            )
             return True
 
         kwargs: Dict[str, float] = {}

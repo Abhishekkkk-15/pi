@@ -193,6 +193,56 @@ def fetch_raw_provider_models(
     return []
 
 
+def fetch_live_model_pricing(
+    provider: str, model_name: str, api_key: str | None = None, base_url: str | None = None
+) -> tuple[float | None, float | None]:
+    """
+    Fetch live prompt/completion pricing per million tokens in USD.
+    Returns (input_price_per_mtok, output_price_per_mtok) or (None, None).
+    """
+    target = model_name.strip().lower()
+    
+    # 1. Try OpenRouter public endpoint
+    import urllib.request
+    import json
+    try:
+        url = "https://openrouter.ai/api/v1/models"
+        req = urllib.request.Request(url, headers={"User-Agent": "pi-python/1.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            for item in data.get("data", []):
+                mid = str(item.get("id", "")).strip().lower()
+                if mid == target or mid.split("/")[-1] == target:
+                    pricing = item.get("pricing", {})
+                    prompt = pricing.get("prompt")
+                    completion = pricing.get("completion")
+                    if prompt is not None and completion is not None:
+                        return float(prompt) * 1_000_000, float(completion) * 1_000_000
+    except Exception:
+        pass
+
+    # 2. Try the provider's /models endpoint
+    if base_url:
+        try:
+            raw_models = fetch_raw_provider_models(base_url, api_key)
+            for m in raw_models:
+                mid = m.get("id") if isinstance(m, dict) else getattr(m, "id", None)
+                if mid and str(mid).strip().lower() == target:
+                    pricing = m.get("pricing") if isinstance(m, dict) else getattr(m, "pricing", None)
+                    if isinstance(pricing, dict):
+                        p = pricing.get("prompt") or pricing.get("input")
+                        c = pricing.get("completion") or pricing.get("output")
+                        if p is not None and c is not None:
+                            pf, cf = float(p), float(c)
+                            if pf < 0.05:  # standard threshold to check if per-token rate
+                                return pf * 1_000_000, cf * 1_000_000
+                            return pf, cf
+        except Exception:
+            pass
+            
+    return None, None
+
+
 class Agent:
     def __init__(self):
         config = Config()
