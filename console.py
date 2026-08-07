@@ -385,7 +385,7 @@ class ConsoleUI:
 
         return FormattedText([
             (f"class:toolbar-{color}", f" {glyph} {bar_str} "),
-            ("", f"{pct:.1f}% ({curr:,} / {cw:,} tokens [{cw_str}])"),
+            ("", f"({pct:.1f}%/{cw_str})"),
         ])
 
     def set_slash_commands(self, commands: List[str]) -> None:
