@@ -6,12 +6,23 @@ gutter markers instead of heavy panels, dim secondary text, one accent color.
 
 from __future__ import annotations
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from contextlib import contextmanager
 import json
 import os
 import re
 import subprocess
-import sys
 import time
 from typing import Any, List, Optional
 

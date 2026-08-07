@@ -714,7 +714,8 @@ class Agent:
 
                 if is_reasoning:
                     if self.config.reasoning_effort:
-                        kwargs["reasoning_effort"] = self.config.reasoning_effort
+                        # kwargs["reasoning_effort"] = self.config.reasoning_effort
+                        pass
                     if self.config.provider == "openrouter":
                         kwargs["include_reasoning"] = True
 
@@ -751,6 +752,7 @@ class Agent:
 
                 for chunk in stream:
                     current_usage = _get_val(chunk, "usage")
+                    print("\n\nussage", current_usage)
                     if current_usage:
                         usage_obj = current_usage
 
@@ -970,7 +972,7 @@ class Agent:
                 self._maybe_compact()
                 api_messages = self._build_api_messages()
                 
-                with open("log.txt", "a") as f:
+                with open("log.txt", "a", encoding="utf-8") as f:
                     new_ln = "\n\n"
                     f.write(new_ln+str(api_messages))
                     
