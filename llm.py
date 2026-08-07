@@ -638,6 +638,7 @@ class Agent:
 
         def _run_once() -> tuple[Any, Optional[BaseException]]:
             try:
+                is_reasoning = "o1" in self.model_name.lower() or "o3" in self.model_name.lower()
                 kwargs: dict[str, Any] = {
                     "model": self.model_name,
                     "messages": messages,
@@ -645,7 +646,14 @@ class Agent:
                 if use_tools:
                     kwargs["tools"] = TOOLS
                 if self.config.max_tokens is not None:
-                    kwargs["max_tokens"] = self.config.max_tokens
+                    if is_reasoning:
+                        kwargs["max_completion_tokens"] = self.config.max_tokens
+                    else:
+                        kwargs["max_tokens"] = self.config.max_tokens
+
+                if is_reasoning and self.config.reasoning_effort:
+                    kwargs["reasoning_effort"] = self.config.reasoning_effort
+
                 if not self.client:
                     return None, RuntimeError(
                         "No LLM client configured. Run /login first."

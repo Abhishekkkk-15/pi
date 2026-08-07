@@ -24,6 +24,8 @@ class Commands:
         "price": "/prices",
         "pricing": "/prices",
         "max_history": "/history",
+        "thinking": "/reasoning",
+        "effort": "/reasoning",
     }
 
     def __init__(self, agent: Agent) -> None:
@@ -937,6 +939,50 @@ class Commands:
             f"By role:\n{role_lines}\n"
             f"{api_line}",
             title="Tokens",
+        )
+        return True
+
+    def reasoning(self) -> bool:
+        """Configure reasoning effort setting for compatible models (low, medium, high)"""
+        from config import update_app_settings
+
+        agent = self.agent
+        console = agent.console
+        current = agent.config.reasoning_effort
+        current_str = str(current).upper() if current else "NONE (DISABLED)"
+
+        console.print_system_message(
+            f"Current REASONING_EFFORT: {current_str}\n"
+            "This controls model thinking/reasoning effort levels for compatible models (e.g. OpenAI o1/o3-mini).",
+            title="Reasoning Effort",
+        )
+
+        picked = console.interactive_pick(
+            ["low", "medium", "high", "none / disable"],
+            title="Choose reasoning effort level",
+            current=current if current else "none / disable",
+        )
+        if not picked:
+            console.print_system_message("Cancelled.", title="Reasoning Effort")
+            return True
+
+        if picked == "none / disable":
+            effort_val = "clear"
+        else:
+            effort_val = picked
+
+        try:
+            settings = update_app_settings(reasoning_effort=effort_val)
+        except ValueError as e:
+            console.print_error(f"Invalid value: {e}", title="Reasoning Effort")
+            return True
+
+        agent.config.apply_app_settings(settings)
+        new_val = str(agent.config.reasoning_effort).upper() if agent.config.reasoning_effort else "NONE (DISABLED)"
+        console.print_system_message(
+            f"Reasoning effort set to: {new_val}\n"
+            "Saved to auth.json (app_settings).",
+            title="Reasoning Effort",
         )
         return True
 

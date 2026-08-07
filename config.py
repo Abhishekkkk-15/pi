@@ -409,6 +409,14 @@ def get_app_settings(auth: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         except (TypeError, ValueError):
             max_tokens = None
 
+    reasoning_effort = raw.get("reasoning_effort")
+    if reasoning_effort is None:
+        reasoning_effort = os.getenv("REASONING_EFFORT")
+    if reasoning_effort is not None:
+        reasoning_effort = str(reasoning_effort).strip().lower()
+        if reasoning_effort not in ("low", "medium", "high"):
+            reasoning_effort = None
+
     return {
         "max_history_messages": max_hist,
         "input_price_per_mtok": _price(
@@ -428,6 +436,7 @@ def get_app_settings(auth: Optional[dict[str, Any]] = None) -> dict[str, Any]:
             minimum=1000,
         ),
         "max_tokens": max_tokens,
+        "reasoning_effort": reasoning_effort,
     }
 
 
@@ -441,6 +450,7 @@ def update_app_settings(
     keep_recent_tokens: Optional[int] = None,
     max_tokens: Optional[int] = None,
     clear_max_tokens: bool = False,
+    reasoning_effort: Optional[str] = None,
     auth: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Persist one or more app settings into auth.json and return the full settings dict."""
@@ -490,6 +500,15 @@ def update_app_settings(
             raise ValueError("max_tokens must be >= 1")
         bucket["max_tokens"] = value
 
+    if reasoning_effort is not None:
+        val = str(reasoning_effort).strip().lower()
+        if val in ("none", "clear", ""):
+            bucket["reasoning_effort"] = None
+        elif val in ("low", "medium", "high"):
+            bucket["reasoning_effort"] = val
+        else:
+            raise ValueError("reasoning_effort must be 'low', 'medium', or 'high'")
+
     data["app_settings"] = bucket
     save_auth(data)
     return get_app_settings(data)
@@ -507,6 +526,7 @@ class Config:
     compact_at_tokens: int = DEFAULT_COMPACT_AT_TOKENS
     keep_recent_tokens: int = DEFAULT_KEEP_RECENT_TOKENS
     max_tokens: int | None = None
+    reasoning_effort: str | None = None
     api_key: str | None = None
     provider: str = "mistral"
     base_url: str = BUILTIN_PROVIDERS["mistral"]["base_url"]
@@ -544,6 +564,7 @@ class Config:
         self.compact_at_tokens = int(app["compact_at_tokens"])
         self.keep_recent_tokens = int(app["keep_recent_tokens"])
         self.max_tokens = app.get("max_tokens")
+        self.reasoning_effort = app.get("reasoning_effort")
 
         auto_risk = os.getenv("AUTONOMOUS_RISK")
         if auto_risk:
@@ -559,6 +580,7 @@ class Config:
         self.compact_at_tokens = int(app["compact_at_tokens"])
         self.keep_recent_tokens = int(app["keep_recent_tokens"])
         self.max_tokens = app.get("max_tokens")
+        self.reasoning_effort = app.get("reasoning_effort")
 
     def reload_from_auth(self) -> None:
         """Refresh provider/model/api_key/base_url from auth.json."""
