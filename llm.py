@@ -692,7 +692,14 @@ class Agent:
 
         def _run_once() -> tuple[Any, Optional[BaseException]]:
             try:
-                is_reasoning = "o1" in self.model_name.lower() or "o3" in self.model_name.lower()
+                is_reasoning = (
+                    "o1" in self.model_name.lower() or 
+                    "o3" in self.model_name.lower() or 
+                    "gpt-5" in self.model_name.lower() or
+                    "reason" in self.model_name.lower() or
+                    "r1" in self.model_name.lower() or
+                    "thinking" in self.model_name.lower()
+                )
                 kwargs: dict[str, Any] = {
                     "model": self.model_name,
                     "messages": messages,
@@ -705,8 +712,11 @@ class Agent:
                     else:
                         kwargs["max_tokens"] = self.config.max_tokens
 
-                if is_reasoning and self.config.reasoning_effort:
-                    kwargs["reasoning_effort"] = self.config.reasoning_effort
+                if is_reasoning:
+                    if self.config.reasoning_effort:
+                        kwargs["reasoning_effort"] = self.config.reasoning_effort
+                    if self.config.provider == "openrouter":
+                        kwargs["include_reasoning"] = True
 
                 if not self.client:
                     return None, RuntimeError(
@@ -956,11 +966,14 @@ class Agent:
 
             user_msg = Message(role=Role.USER, content=user_query)
             self._append_message(user_msg)
-
             while True:
                 self._maybe_compact()
                 api_messages = self._build_api_messages()
-
+                
+                with open("log.txt", "a") as f:
+                    new_ln = "\n\n"
+                    f.write(new_ln+str(api_messages))
+                    
                 try:
                     res = self._create_completion(api_messages, use_tools=True)
                 except Exception as e:
