@@ -364,17 +364,11 @@ class ConsoleUI:
         return glyph, color, pct
 
     def _render_context_toolbar(self) -> FormattedText:
-        """Renders bottom toolbar for prompt_toolkit with double ring linear progress bar."""
+        """Renders bottom toolbar for prompt_toolkit with context usage percentage."""
         cw = max(1, self._context_window)
         curr = self._current_tokens
         pct = min(100.0, max(0.0, (curr / cw) * 100))
         glyph, color, _ = self._get_context_bar_info()
-
-        bar_len = 10
-        filled = int(round((pct / 100.0) * bar_len))
-        filled = max(0, min(bar_len, filled))
-        empty = bar_len - filled
-        bar_str = ("▰" * filled) + ("▱" * empty)
 
         if cw >= 1_000_000:
             cw_str = f"{cw / 1_000_000:.1f}M".replace(".0M", "M")
@@ -384,7 +378,7 @@ class ConsoleUI:
             cw_str = str(cw)
 
         return FormattedText([
-            (f"class:toolbar-{color}", f" {glyph} {bar_str} "),
+            (f"class:toolbar-{color}", f" {glyph} "),
             ("", f"({pct:.1f}%/{cw_str})"),
         ])
 
