@@ -357,6 +357,10 @@ class Agent:
                     cached = int(getattr(pd, "cached_tokens", 0) or 0)
             if not cached:
                 cached = int(usage.get("cache_read_input_tokens") or 0)
+            if not cached:
+                cached = int(usage.get("prompt_cache_hit_tokens") or 0)
+            if not cached:
+                cached = int(usage.get("cached_content_token_count") or 0)
         else:
             prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
             completion = int(getattr(usage, "completion_tokens", 0) or 0)
@@ -372,6 +376,10 @@ class Agent:
             if not cached:
                 # Try Anthropic-style attributes
                 cached = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+            if not cached:
+                cached = int(getattr(usage, "prompt_cache_hit_tokens", 0) or 0)
+            if not cached:
+                cached = int(getattr(usage, "cached_content_token_count", 0) or 0)
 
         if prompt == 0 and completion == 0 and total == 0 and cached == 0:
             return
@@ -752,7 +760,6 @@ class Agent:
 
                 for chunk in stream:
                     current_usage = _get_val(chunk, "usage")
-                    print("\n\nussage", current_usage)
                     if current_usage:
                         usage_obj = current_usage
 
@@ -972,10 +979,6 @@ class Agent:
                 self._maybe_compact()
                 api_messages = self._build_api_messages()
                 
-                with open("log.txt", "a", encoding="utf-8") as f:
-                    new_ln = "\n\n"
-                    f.write(new_ln+str(api_messages))
-                    
                 try:
                     res = self._create_completion(api_messages, use_tools=True)
                 except Exception as e:
