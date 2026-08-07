@@ -1465,24 +1465,62 @@ class ConsoleUI:
         sys.stdout.flush()
 
     def stream_content_start(self):
-        """Stop spinner and start streaming content prefix."""
+        """Stop spinner and start streaming formatted Markdown content live."""
         self.stop_loading()
-        sys.stdout.write("\n● ")
-        sys.stdout.flush()
+        self._content_stream_buffer = ""
+        try:
+            self._content_stream_live = Live(
+                self._gutter(GLYPH["bullet"], ACCENT, Markdown("")),
+                console=self.console,
+                refresh_per_second=12,
+                transient=False,
+            )
+            self._content_stream_live.start()
+        except Exception:
+            self._content_stream_live = None
+            sys.stdout.write("\n● ")
+            sys.stdout.flush()
 
     def stream_content_chunk(self, chunk: str):
-        """Write a response chunk directly."""
-        try:
-            sys.stdout.write(chunk)
-        except UnicodeEncodeError:
-            # Fallback for environments with encoding limitations (like Windows cmd cp1252)
-            sys.stdout.write(chunk.encode(sys.stdout.encoding or "utf-8", errors="replace").decode(sys.stdout.encoding or "utf-8"))
-        sys.stdout.flush()
+        """Update live Markdown block with new content chunk."""
+        if not chunk:
+            return
+        self._content_stream_buffer += chunk
+        live = getattr(self, "_content_stream_live", None)
+        if live is not None:
+            try:
+                try:
+                    body: RenderableType = Markdown(self._content_stream_buffer)
+                except Exception:
+                    body = Text(self._content_stream_buffer, style=INK)
+                live.update(self._gutter(GLYPH["bullet"], ACCENT, body))
+            except Exception:
+                pass
+        else:
+            try:
+                sys.stdout.write(chunk)
+            except UnicodeEncodeError:
+                # Fallback for environments with encoding limitations (like Windows cmd cp1252)
+                sys.stdout.write(
+                    chunk.encode(sys.stdout.encoding or "utf-8", errors="replace").decode(
+                        sys.stdout.encoding or "utf-8"
+                    )
+                )
+            sys.stdout.flush()
 
     def stream_content_end(self):
-        """Finish streaming content block."""
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        """Finish live streaming Markdown block."""
+        live = getattr(self, "_content_stream_live", None)
+        if live is not None:
+            try:
+                live.stop()
+            except Exception:
+                pass
+            self._content_stream_live = None
+            self._at_gap = False
+        else:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
 
     def print_step_thinking(self, content: str):
         """Print step-level thinking summary in a premium panel."""
