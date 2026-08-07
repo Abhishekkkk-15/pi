@@ -281,6 +281,8 @@ class Agent:
             self._pending_completion_tokens,
             self.config.input_price_per_mtok,
             self.config.output_price_per_mtok,
+            self._pending_cached_tokens,
+            self.config.provider,
         )
         self._pending_prompt_tokens = 0
         self._pending_completion_tokens = 0
@@ -339,6 +341,8 @@ class Agent:
             completion,
             self.config.input_price_per_mtok,
             self.config.output_price_per_mtok,
+            cached,
+            self.config.provider,
         )
         self._persist_session_usage()
 

@@ -32,12 +32,20 @@ def estimate_cost(
     completion_tokens: int,
     input_price: float,
     output_price: float,
+    cached_tokens: int = 0,
+    provider: str = "openai",
 ) -> float:
-    """Estimate USD cost from token counts and per-million-token prices."""
-    return (
-        (prompt_tokens / 1_000_000) * input_price
-        + (completion_tokens / 1_000_000) * output_price
-    )
+    """Estimate USD cost from token counts and per-million-token prices, accounting for caching."""
+    provider_lower = str(provider).lower()
+    if "anthropic" in provider_lower or "claude" in provider_lower or "deepseek" in provider_lower:
+        discount = 0.1
+    else:
+        discount = 0.5
+        
+    non_cached = max(0, prompt_tokens - cached_tokens)
+    input_cost = (non_cached * input_price + cached_tokens * input_price * discount) / 1_000_000
+    output_cost = (completion_tokens * output_price) / 1_000_000
+    return input_cost + output_cost
 
 
 def auth_path() -> Any:
