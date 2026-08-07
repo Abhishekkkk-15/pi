@@ -1441,7 +1441,11 @@ class ConsoleUI:
 
     def stream_thinking_chunk(self, chunk: str):
         """Write a thought/reasoning token chunk directly."""
-        sys.stdout.write(chunk)
+        try:
+            sys.stdout.write(chunk)
+        except UnicodeEncodeError:
+            # Fallback for environments with encoding limitations (like Windows cmd cp1252)
+            sys.stdout.write(chunk.encode(sys.stdout.encoding or "utf-8", errors="replace").decode(sys.stdout.encoding or "utf-8"))
         sys.stdout.flush()
 
     def stream_thinking_end(self):
@@ -1456,8 +1460,12 @@ class ConsoleUI:
         sys.stdout.flush()
 
     def stream_content_chunk(self, chunk: str):
-        """Write a content token chunk directly."""
-        sys.stdout.write(chunk)
+        """Write a response chunk directly."""
+        try:
+            sys.stdout.write(chunk)
+        except UnicodeEncodeError:
+            # Fallback for environments with encoding limitations (like Windows cmd cp1252)
+            sys.stdout.write(chunk.encode(sys.stdout.encoding or "utf-8", errors="replace").decode(sys.stdout.encoding or "utf-8"))
         sys.stdout.flush()
 
     def stream_content_end(self):
