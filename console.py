@@ -368,7 +368,6 @@ class ConsoleUI:
         cw = max(1, self._context_window)
         curr = self._current_tokens
         pct = min(100.0, max(0.0, (curr / cw) * 100))
-        glyph, color, _ = self._get_context_bar_info()
 
         if cw >= 1_000_000:
             cw_str = f"{cw / 1_000_000:.1f}M".replace(".0M", "M")
@@ -378,7 +377,6 @@ class ConsoleUI:
             cw_str = str(cw)
 
         return FormattedText([
-            (f"class:toolbar-{color}", f" {glyph} "),
             ("", f"({pct:.1f}%/{cw_str})"),
         ])
 
@@ -873,7 +871,7 @@ class ConsoleUI:
                 "toolbar-ansigreen": "ansigreen bold",
                 "toolbar-ansiyellow": "ansiyellow bold",
                 "toolbar-ansired": "ansired bold",
-                "bottom-toolbar": "fg:#8a8a8a bg:#1a1a1a",
+                "bottom-toolbar": "noinherit fg:#8a8a8a",
                 "": INK,
             }
         )
