@@ -238,10 +238,6 @@ pip install -e .
 # Optional: set ENV=development in .env so data stays in the repo
 ```
 
-## License
-
-MIT — see [LICENSE](LICENSE).
-
 ## Acknowledgments
 
 - [Mistral AI](https://mistral.ai/), [Groq](https://groq.com/), and other OpenAI-compatible providers
