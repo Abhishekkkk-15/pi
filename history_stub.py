@@ -24,6 +24,19 @@ WRITE_EDIT_TOOLS = frozenset({"write", "edit"})
 AGE_OUT_MIN_CHARS = 800
 AGE_OUT_PREVIEW_CHARS = 120
 
+_STUBBING_ENABLED = True
+
+
+def set_stubbing_enabled(enabled: bool) -> None:
+    """Globally enable or disable all history stubbing behavior."""
+    global _STUBBING_ENABLED
+    _STUBBING_ENABLED = bool(enabled)
+
+
+def is_stubbing_enabled() -> bool:
+    """Return whether history stubbing is currently enabled."""
+    return _STUBBING_ENABLED
+
 
 def line_count(text: str) -> int:
     if not text:
@@ -54,6 +67,9 @@ def tool_succeeded(result: str) -> bool:
 
 
 def stub_write_arguments(args: dict[str, Any]) -> dict[str, Any]:
+    if not is_stubbing_enabled():
+        return args
+
     path = str(args.get("path", "") or "")
     content = str(args.get("content", "") or "")
     if is_stubbed(content):
@@ -70,6 +86,9 @@ def stub_write_arguments(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def stub_edit_arguments(args: dict[str, Any]) -> dict[str, Any]:
+    if not is_stubbing_enabled():
+        return args
+
     path = str(args.get("path", "") or "")
     edits = args.get("edits") if isinstance(args.get("edits"), list) else []
     if not edits:
@@ -114,6 +133,31 @@ def stub_edit_arguments(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def stub_read_arguments(args: dict[str, Any]) -> dict[str, Any]:
+    if not is_stubbing_enabled():
+        return args
+
+    path = str(args.get("path", "") or "")
+    offset = args.get("offset")
+    limit = args.get("limit")
+    return {
+        "path": "<omitted>" if not path else path,
+        "offset": offset,
+        "limit": limit,
+        "_stubbed": True,
+    }
+
+
+def stub_tool_arguments(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    if name == "write":
+        return stub_write_arguments(args)
+    if name == "edit":
+        return stub_edit_arguments(args)
+    if name in STUBBABLE_RESULT_TOOLS:
+        return stub_read_arguments(args)
+    return args
+
+
 def _tool_call_id(tc: Any) -> Optional[str]:
     if isinstance(tc, dict):
         return tc.get("id")
@@ -145,7 +189,7 @@ def stub_assistant_tool_call(
     Replace fat write/edit arguments on the in-memory assistant message.
     Returns True if anything changed.
     """
-    if tool_name not in WRITE_EDIT_TOOLS:
+    if not is_stubbing_enabled():
         return False
     calls = getattr(assistant, "tool_calls", None)
     if not calls:
@@ -159,7 +203,7 @@ def stub_assistant_tool_call(
         if not fn:
             continue
         name = fn.get("name") or tool_name
-        if name not in WRITE_EDIT_TOOLS:
+        if name not in WRITE_EDIT_TOOLS and name not in STUBBABLE_RESULT_TOOLS:
             continue
         raw = fn.get("arguments", "") or ""
         try:
@@ -169,10 +213,7 @@ def stub_assistant_tool_call(
         if not isinstance(args, dict):
             continue
 
-        if name == "write":
-            stubbed = stub_write_arguments(args)
-        else:
-            stubbed = stub_edit_arguments(args)
+        stubbed = stub_tool_arguments(name, args)
 
         new_raw = json.dumps(stubbed, ensure_ascii=False)
         if new_raw == raw:
@@ -187,6 +228,8 @@ def stub_assistant_tool_call(
 
 def stub_tool_result(name: str, content: str) -> str:
     """Collapse a large aged tool result to a short re-fetch hint."""
+    if not is_stubbing_enabled():
+        return content
     if not content or is_stubbed(content):
         return content
     if not tool_succeeded(content):
@@ -204,6 +247,40 @@ def stub_tool_result(name: str, content: str) -> str:
     )
 
 
+def _logical_turn_blocks(messages: list[Message]) -> list[list[int]]:
+    """Group assistant tool-call chains and their tool responses into one logical block."""
+    blocks: list[list[int]] = []
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        role = (msg.role.value if isinstance(msg.role, Role) else str(msg.role)).lower()
+        if role == "system":
+            i += 1
+            continue
+
+        if role == "assistant" and getattr(msg, "tool_calls", None):
+            block = [i]
+            j = i + 1
+            while j < len(messages):
+                next_msg = messages[j]
+                next_role = (
+                    next_msg.role.value if isinstance(next_msg.role, Role) else str(next_msg.role)
+                ).lower()
+                if next_role == "tool":
+                    block.append(j)
+                    j += 1
+                    continue
+                break
+            blocks.append(block)
+            i = j
+            continue
+
+        blocks.append([i])
+        i += 1
+
+    return blocks
+
+
 def age_out_large_payloads(
     messages: list[Message],
     *,
@@ -211,31 +288,36 @@ def age_out_large_payloads(
 ) -> bool:
     """
     Stub aged tool results (and any leftover fat write/edit args) outside the
-    hot window. Hot window = last `keep_recent` non-system messages.
+    hot window. A recent assistant tool-call batch and its tool responses are
+    treated as one logical unit so cache-friendly prefixes are preserved.
     Returns True if anything changed.
     """
+    if not is_stubbing_enabled():
+        return False
     if not messages or keep_recent < 1:
         return False
 
-    # Indices of non-system messages from oldest to newest
-    body_indices = [
-        i
-        for i, m in enumerate(messages)
-        if (m.role.value if isinstance(m.role, Role) else str(m.role)).lower()
-        != "system"
-    ]
-    if not body_indices:
+    blocks = _logical_turn_blocks(messages)
+    if not blocks:
         return False
 
-    hot_start_pos = max(0, len(body_indices) - keep_recent)
-    hot_index_set = set(body_indices[hot_start_pos:])
+    hot_start_pos = max(0, len(blocks) - keep_recent)
+    hot_block_ids = set(range(hot_start_pos, len(blocks)))
+    hot_message_indices = {
+        idx
+        for block_id, block in enumerate(blocks)
+        if block_id in hot_block_ids
+        for idx in block
+    }
 
     changed = False
     for i, msg in enumerate(messages):
+        if i in hot_message_indices:
+            continue
+
         role = (msg.role.value if isinstance(msg.role, Role) else str(msg.role)).lower()
 
-        # Always safe to stub write/edit args once the tool already ran
-        # (even in the hot window — model should re-read the file).
+        # Always safe to stub write/edit args once the tool already ran.
         if role == "assistant" and getattr(msg, "tool_calls", None):
             for tc in msg.tool_calls or []:
                 fn = _tool_call_function(tc)
@@ -262,9 +344,6 @@ def age_out_large_payloads(
                     if isinstance(tc, dict):
                         tc["function"] = fn
                     changed = True
-
-        if i in hot_index_set:
-            continue
 
         if role != "tool":
             continue
