@@ -599,7 +599,7 @@ class Agent:
         cw = self.get_model_context_window()
         self.console.set_context_state(working_tokens, cw)
         raw_dicts = [m.to_dict() for m in working]
-        return sanitize_api_messages(raw_dicts)
+        return raw_dicts
 
     def _maybe_compact(self) -> None:
         """Auto path: only runs when enabled and over threshold."""
