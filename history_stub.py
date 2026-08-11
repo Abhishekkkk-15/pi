@@ -24,7 +24,25 @@ WRITE_EDIT_TOOLS = frozenset({"write", "edit"})
 AGE_OUT_MIN_CHARS = 800
 AGE_OUT_PREVIEW_CHARS = 120
 
-_STUBBING_ENABLED = True
+_STUBBING_ENABLED = False
+# Minimum size (bytes) of tool-call arguments to consider stubbing.
+# Arguments smaller than this threshold will be left intact so small calls
+# (paths, short offsets, tiny JSON) are not omitted unexpectedly.
+STUB_ARGS_MIN_CHARS = 256
+
+
+def set_stub_args_min_chars(n: int) -> None:
+    """Set the minimum byte length for tool-call argument stubbing."""
+    global STUB_ARGS_MIN_CHARS
+    try:
+        STUB_ARGS_MIN_CHARS = max(0, int(n))
+    except Exception:
+        STUB_ARGS_MIN_CHARS = 0
+
+
+def get_stub_args_min_chars() -> int:
+    """Return the current stub-argument minimum size in bytes."""
+    return STUB_ARGS_MIN_CHARS
 
 
 def set_stubbing_enabled(enabled: bool) -> None:
@@ -211,6 +229,20 @@ def stub_assistant_tool_call(
         except (TypeError, ValueError, json.JSONDecodeError):
             continue
         if not isinstance(args, dict):
+            continue
+        # If the raw arguments are small, skip stubbing to avoid removing
+        # tiny, important payloads (paths, small offsets, etc.). Use byte
+        # length for a conservative threshold.
+        try:
+            if isinstance(raw, str):
+                raw_bytes_len = len(raw.encode("utf-8"))
+            else:
+                raw_bytes_len = len(json.dumps(raw, ensure_ascii=False).encode("utf-8"))
+        except Exception:
+            raw_bytes_len = 0
+
+        if raw_bytes_len < STUB_ARGS_MIN_CHARS:
+            # small argument payload — do not stub
             continue
 
         stubbed = stub_tool_arguments(name, args)
