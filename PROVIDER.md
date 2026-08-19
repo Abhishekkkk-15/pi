@@ -26,6 +26,8 @@ The Agent talks to language models through a small Python interface. HTTP, SDKs,
 |------|---------|
 | `providers/base.py` | `LLMProvider` ABC and shared types |
 | `providers/openai.py` | Official OpenAI (Responses API) + OpenAI-compatible Chat Completions |
+| `providers/vertex.py` | Google Vertex AI (Gemini via `google.genai`, `vertexai=True`) |
+| `providers/stream.py` | Shared `StreamUI` start/end pairing for thinking / content / tools |
 | `providers/__init__.py` | `create_provider(name, api_key, base_url)` factory |
 | `config.py` | `BUILTIN_PROVIDERS` names, default URLs, default models |
 | `llm.py` | `Agent.create_model()` → `self.llm.complete(...)` |
@@ -68,12 +70,16 @@ Factory today:
 
 ```python
 # providers/__init__.py
+if is_vertex_provider(name):
+    if not vertex_can_configure(api_key):
+        return None
+    return VertexAIProvider(...)
 if not api_key:
     return None
-return OpenAIProvider(name=name, api_key=api_key, base_url=base_url)
+return OpenAIProvider(...)
 ```
 
-Mistral, Groq, OpenRouter, and custom OpenAI-compatible URLs all go through `OpenAIProvider` because they speak Chat Completions. A native Gemini (or Anthropic) backend needs its own class.
+Mistral, Groq, OpenRouter, and custom OpenAI-compatible URLs all go through `OpenAIProvider`. Vertex AI uses `VertexAIProvider`. A native Anthropic / Gemini Developer API backend would be another class.
 
 ## Contract: `LLMProvider`
 
@@ -324,6 +330,56 @@ Stream deltas:
 
 No `looks_like_reasoning_model`. Effort is forwarded whenever the user enabled it.
 
+## Vertex AI provider (`VertexAIProvider`)
+
+Native Gemini on Google Cloud Vertex AI using:
+
+```python
+from google import genai
+client = genai.Client(vertexai=True, project=..., location=..., credentials=...)
+client.models.generate_content_stream(...)
+```
+
+Registered for names `vertex` and `vertexai`. It is **not** OpenAI-compatible Chat Completions.
+
+### Auth
+
+`/login` stores one of:
+
+| `/login` value | Meaning |
+|----------------|---------|
+| GCP project id | Use that project + Application Default Credentials (or `GOOGLE_APPLICATION_CREDENTIALS`) |
+| Path to service-account JSON | Load that key; project from JSON unless env overrides |
+| Raw service-account JSON | Same as a file |
+| `adc` | ADC + `GOOGLE_CLOUD_PROJECT` |
+| `AIza…` key | Passed as `api_key` with `vertexai=True` (Vertex express / API-key mode) |
+
+Also accepted from the environment: `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_APPLICATION_CREDENTIALS`.
+
+`create_provider` may succeed with **no** stored key if those env vars are set.
+
+### Location (`base_url`)
+
+For this builtin, `base_url` is the Vertex **region** (default `us-central1`), not an HTTP URL. `/login` prompts for it. A host like `https://us-central1-aiplatform.googleapis.com` is parsed down to `us-central1`.
+
+### Request mapping
+
+| Agent | Vertex / Gemini |
+|-------|-----------------|
+| system messages | `GenerateContentConfig.system_instruction` |
+| user / assistant / tool | `contents` (`role=user` / `role=model`; tool results as `Part.from_function_response`) |
+| Chat Completions tools | `types.Tool(function_declarations=[FunctionDeclaration(...)])` |
+| `max_tokens` | `max_output_tokens` |
+| `/reasoning` set | `ThinkingConfig(include_thoughts=True)` plus `thinking_level` and/or `thinking_budget` |
+| streaming | `generate_content_stream` |
+| SDK auto-tools | `AutomaticFunctionCallingConfig(disable=True)` — Agent executes tools |
+
+Stream parts: `part.thought` → thinking UI; `part.text` → content; `part.function_call` → `ToolCall`. Usage: `prompt_token_count` / `candidates_token_count` (+ `thoughts_token_count`) / `cached_content_token_count`.
+
+`list_models` uses `client.models.list()` (skips embed/imagen/veo). On failure it falls back to `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash`, `gemini-2.0-flash-lite`.
+
+Gemini 3 thought signatures are not stored in Agent history; tool loops on those models may need extra work later.
+
 ## Config and builtins
 
 `config.BUILTIN_PROVIDERS`:
@@ -333,6 +389,7 @@ No `looks_like_reasoning_model`. Effort is forwarded whenever the user enabled i
 | `openai` | `https://api.openai.com/v1` | `gpt-4o` | Responses |
 | `mistral` | `https://api.mistral.ai/v1` | `mistral-large-latest` | Chat Completions |
 | `groq` | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` | Chat Completions |
+| `vertex` | `us-central1` (location) | `gemini-2.5-flash` | Vertex `generate_content_stream` |
 
 Anything else (OpenRouter, local llama.cpp, custom) is a custom provider **name** in `auth.json` with its own `base_url` and keys. Until you register a dedicated class, the factory still builds `OpenAIProvider`, so the URL must be OpenAI-compatible.
 
@@ -340,9 +397,9 @@ Keys, active provider, and model live under `llm_settings` in `auth.json` (see `
 
 ## Adding a new native provider
 
-Example: Gemini.
+Example: Anthropic (Vertex is already implemented in `providers/vertex.py`).
 
-### 1. Implement `providers/gemini.py`
+### 1. Implement `providers/anthropic.py`
 
 Subclass `LLMProvider`. Convert OpenAI-style `messages` / `tools` to Gemini, stream into `StreamHandler`, return `Completion`.
 
@@ -412,9 +469,7 @@ BUILTIN_PROVIDERS: dict[str, dict[str, str]] = {
 
 Without this, users can still `/login` a custom provider name; they must type URL and model themselves.
 
-### 4. Dependency
-
-Add the vendor SDK in `pyproject.toml` if needed. `openai` is already a dependency because `OpenAIProvider` uses it.
+### 4. Add the vendor SDK in `pyproject.toml` if needed. `openai` and `google-genai` are already dependencies.
 
 ### 5. Do not change `llm.py` for the SDK
 

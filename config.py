@@ -10,7 +10,8 @@ from memory import Memory, is_development
 
 load_dotenv()
 
-# Built-in OpenAI-compatible providers
+# Built-in providers. `base_url` is an OpenAI-compatible endpoint except for
+# `vertex`, where it is the GCP location (e.g. us-central1).
 BUILTIN_PROVIDERS: dict[str, dict[str, str]] = {
     "openai": {
         "base_url": "https://api.openai.com/v1",
@@ -23,6 +24,10 @@ BUILTIN_PROVIDERS: dict[str, dict[str, str]] = {
     "groq": {
         "base_url": "https://api.groq.com/openai/v1",
         "default_model": "llama-3.3-70b-versatile",
+    },
+    "vertex": {
+        "base_url": "us-central1",
+        "default_model": "gemini-2.5-flash",
     },
 }
 

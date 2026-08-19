@@ -132,6 +132,8 @@ KNOWN_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "gemini-1.5-pro": 1048576,
     "gemini-1.5-flash": 1048576,
     "gemini-2.0-flash": 1048576,
+    "gemini-2.5-flash": 1048576,
+    "gemini-2.5-pro": 1048576,
     "deepseek-chat": 64000,
     "deepseek-coder": 64000,
     "deepseek-reasoner": 64000,
@@ -479,8 +481,6 @@ class Agent:
 
     def list_available_models_info(self) -> list[dict[str, Any]]:
         """Fetch models real-time with resolved context window metadata."""
-        if not self.config.api_key:
-            raise RuntimeError("No API key configured. Run /login first.")
         if not self.llm:
             self.llm = self.create_model()
         if not self.llm:

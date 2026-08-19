@@ -15,6 +15,8 @@ from models import Message, Role
 PROVIDER_TOKENIZERS: Dict[str, str] = {
     "mistral": "mistralai/Mistral-7B-v0.1",
     "groq": "Xenova/gpt-4o",
+    "vertex": "Xenova/gpt-4o",
+    "vertexai": "Xenova/gpt-4o",
 }
 FALLBACK_TOKENIZER = "gpt2"
 

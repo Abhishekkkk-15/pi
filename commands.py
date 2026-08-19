@@ -268,7 +268,7 @@ class Commands:
 
     def login(self) -> bool:
         """Set Primary/Secondary API key (supports rate-limit failover)"""
-        from config import get_provider_settings, set_provider_key
+        from config import get_provider_settings, set_provider_key, upsert_provider_settings
 
         agent = self.agent
         console = agent.console
@@ -294,16 +294,31 @@ class Commands:
         slot = 0 if picked.startswith("Primary") else 1
         slot_name = "Primary" if slot == 0 else "Secondary"
 
-        api_key = console.get_api_key(f"{provider} ({slot_name})")
+        from providers.vertex import is_vertex_provider
+
+        if is_vertex_provider(provider):
+            api_key = console.get_api_key(
+                f"{provider} ({slot_name}) project / SA JSON / adc",
+                env_var_hint="GOOGLE_CLOUD_PROJECT",
+            )
+        else:
+            api_key = console.get_api_key(f"{provider} ({slot_name})")
         if not api_key:
             return True
 
         try:
             set_provider_key(provider, slot, api_key, make_active_slot=True)
+            if is_vertex_provider(provider):
+                loc = console.prompt_text(
+                    "Vertex location",
+                    default=str(settings.get("base_url") or "us-central1"),
+                )
+                if loc:
+                    upsert_provider_settings(provider, base_url=loc.strip())
             agent.apply_provider_runtime()
             updated = get_provider_settings(provider)
             console.print_system_message(
-                f"{slot_name} API key saved for '{provider}'.\n"
+                f"{slot_name} credentials saved for '{provider}'.\n"
                 f"Keys configured: {updated.get('key_count', 0)}/2\n"
                 f"Active slot: {'Primary' if updated.get('active_key_index', 0) == 0 else 'Secondary'}",
                 title="Auth Success",
@@ -430,7 +445,15 @@ class Commands:
             f"Endpoint: {settings.get('base_url') or '(none)'}"
         )
         if not settings.get("api_key"):
-            msg += "\nNo API key yet — run /login to authenticate."
+            from providers.vertex import is_vertex_provider
+
+            if is_vertex_provider(provider_name):
+                msg += (
+                    "\nNo project/credentials yet — run /login "
+                    "(or set GOOGLE_CLOUD_PROJECT + ADC)."
+                )
+            else:
+                msg += "\nNo API key yet — run /login to authenticate."
         console.print_system_message(msg, title="Provider")
         return True
 
@@ -443,15 +466,17 @@ class Commands:
         provider = agent.config.provider
         CUSTOM = "+ Enter model name manually..."
 
-        if not agent.config.api_key:
+        if not agent.llm:
+            agent.llm = agent.create_model()
+        if not agent.llm:
             console.print_error(
-                "No API key for the active provider. Run /login first.",
+                "No LLM client for the active provider. Run /login first.",
                 title="Model",
             )
             return True
         if not agent.config.base_url:
             console.print_error(
-                "No base URL configured for this provider.",
+                "No base URL / location configured for this provider.",
                 title="Model",
             )
             return True
