@@ -1,5 +1,4 @@
 from mistralai.client import Mistral
-from openai import OpenAI
 import os
 import prompts
 from enum import Enum
@@ -22,6 +21,8 @@ from history_stub import (
     stub_assistant_tool_call,
     tool_succeeded,
 )
+from providers import create_provider
+from providers.base import LLMProvider, StreamHandler
 
 
 def sanitize_api_messages(raw_messages: list[dict]) -> list[dict]:
@@ -247,8 +248,9 @@ class Agent:
     def __init__(self):
         config = Config()
         self.config = config
-        self.console = get_console() 
-        self.client = self.create_model()
+        self.console = get_console()
+        self.llm: LLMProvider | None = self.create_model()
+        self.client = getattr(self.llm, "client", None)
         self.prompt = prompts.Prompt()
         self.memory: Memory = Memory() 
         self.memory.messages = [Message(role=Role.SYSTEM, content=self.prompt.get_system_prompt())]
@@ -479,47 +481,25 @@ class Agent:
         """Fetch models real-time with resolved context window metadata."""
         if not self.config.api_key:
             raise RuntimeError("No API key configured. Run /login first.")
-        base_url = self.config.base_url or BUILTIN_PROVIDERS.get(
-            self.config.provider, {}
-        ).get("base_url", "https://api.mistral.ai/v1")
-
-        # Perform raw HTTP GET request to preserve provider's extra raw JSON fields
-        raw_models = fetch_raw_provider_models(base_url, self.config.api_key)
+        if not self.llm:
+            self.llm = self.create_model()
+        if not self.llm:
+            raise RuntimeError("No LLM client configured. Run /login first.")
 
         results = []
-        seen = set()
-
-        if raw_models:
-            for m in raw_models:
-                mid = m.get("id") if isinstance(m, dict) else getattr(m, "id", None)
-                if mid and str(mid) not in seen:
-                    mid_str = str(mid)
-                    seen.add(mid_str)
-                    cw = self.get_model_context_window(model_name=mid_str, model_obj=m)
-                    results.append(
-                        {
-                            "id": mid_str,
-                            "context_window": cw,
-                            "formatted_context": format_tokens(cw),
-                        }
-                    )
-        else:
-            client = self.client or OpenAI(api_key=self.config.api_key, base_url=base_url)
-            response = client.models.list()
-            for m in getattr(response, "data", []) or []:
-                mid = getattr(m, "id", None)
-                if mid and str(mid) not in seen:
-                    mid_str = str(mid)
-                    seen.add(mid_str)
-                    cw = self.get_model_context_window(model_name=mid_str, model_obj=m)
-                    results.append(
-                        {
-                            "id": mid_str,
-                            "context_window": cw,
-                            "formatted_context": format_tokens(cw),
-                        }
-                    )
-
+        seen: set[str] = set()
+        for info in self.llm.list_models():
+            if info.id in seen:
+                continue
+            seen.add(info.id)
+            cw = self.get_model_context_window(model_name=info.id, model_obj=info.raw)
+            results.append(
+                {
+                    "id": info.id,
+                    "context_window": cw,
+                    "formatted_context": format_tokens(cw),
+                }
+            )
         results.sort(key=lambda x: x["id"].lower())
         return results
 
@@ -529,9 +509,10 @@ class Agent:
         return [item["id"] for item in info]
 
     def apply_provider_runtime(self) -> None:
-        """Reload config from auth.json and rebuild the OpenAI client."""
+        """Reload config from auth.json and rebuild the LLM provider."""
         self.config.reload_from_auth()
-        self.client = self.create_model()
+        self.llm = self.create_model()
+        self.client = getattr(self.llm, "client", None)
 
 
     def select_relevant_skills(self, user_query: str) -> list[str]:
@@ -679,257 +660,92 @@ class Agent:
         stream_to_ui: bool = True,
     ) -> Any:
         """
-        Run chat.completions.create.
+        Run one provider completion.
         On HTTP 429, rotate to the secondary API key (if configured) and retry once.
         """
         from config import rotate_provider_key
         from tokenizer import count_messages
 
-        def _is_rate_limit(exc: BaseException) -> bool:
-            name = type(exc).__name__
-            if "RateLimit" in name:
-                return True
-            status = getattr(exc, "status_code", None)
-            if status == 429:
-                return True
-            resp = getattr(exc, "response", None)
-            if resp is not None and getattr(resp, "status_code", None) == 429:
-                return True
-            msg = str(exc).lower()
-            return "rate limit" in msg or "429" in msg
+        class _ConsoleStream(StreamHandler):
+            def __init__(self, console) -> None:
+                self.console = console
+                self._loading = False
+
+            def thinking_start(self) -> None:
+                self.console.stream_thinking_start()
+
+            def thinking_chunk(self, text: str) -> None:
+                self.console.stream_thinking_chunk(text)
+
+            def thinking_end(self) -> None:
+                self.console.stream_thinking_end()
+
+            def content_start(self) -> None:
+                self.console.stream_content_start()
+
+            def content_chunk(self, text: str) -> None:
+                self.console.stream_content_chunk(text)
+
+            def content_end(self) -> None:
+                self.console.stream_content_end()
+
+            def tool_args_progress(self, names: str, kb: float) -> None:
+                msg = f"Generating arguments for {names}... ({kb:.1f} KB)"
+                if not self._loading:
+                    self.console.start_loading(msg)
+                    self._loading = True
+                else:
+                    self.console.update_loading_message(msg)
+
+            def stop_loading(self) -> None:
+                if self._loading:
+                    self.console.stop_loading()
+                    self._loading = False
+
+        def _estimate_usage(msgs: list[dict], completion_text: str):
+            msg_objs = []
+            for m in msgs:
+                msg_objs.append(
+                    Message(
+                        role=Role.from_val(m.get("role")),
+                        content=m.get("content") or "",
+                        name=m.get("name"),
+                        tool_calls=m.get("tool_calls"),
+                        tool_call_id=m.get("tool_call_id"),
+                    )
+                )
+            _, prompt_tokens, _ = count_messages(msg_objs, provider=self.config.provider)
+            completion_msg = Message(role=Role.ASSISTANT, content=completion_text)
+            _, completion_tokens, _ = count_messages(
+                [completion_msg], provider=self.config.provider
+            )
+
+            class EstimatedUsage:
+                def __init__(self, prompt, completion):
+                    self.prompt_tokens = prompt
+                    self.completion_tokens = completion
+                    self.total_tokens = prompt + completion
+                    self.prompt_tokens_details = None
+                    self.cache_read_input_tokens = 0
+
+            return EstimatedUsage(prompt_tokens, completion_tokens)
 
         def _run_once() -> tuple[Any, Optional[BaseException]]:
             try:
-                is_reasoning = (
-                    "o1" in self.model_name.lower() or 
-                    "o3" in self.model_name.lower() or 
-                    "gpt-5" in self.model_name.lower() or
-                    "reason" in self.model_name.lower() or
-                    "r1" in self.model_name.lower() or
-                    "thinking" in self.model_name.lower()
-                )
-                kwargs: dict[str, Any] = {
-                    "model": self.model_name,
-                    "messages": messages,
-                }
-                if use_tools:
-                    kwargs["tools"] = TOOLS
-                if self.config.max_tokens is not None:
-                    if is_reasoning:
-                        kwargs["max_completion_tokens"] = self.config.max_tokens
-                    else:
-                        kwargs["max_tokens"] = self.config.max_tokens
-
-                if is_reasoning:
-                    if self.config.reasoning_effort:
-                        # kwargs["reasoning_effort"] = self.config.reasoning_effort
-                        pass
-                    if self.config.provider == "openrouter":
-                        kwargs["include_reasoning"] = True
-
-                if not self.client:
+                if not self.llm:
                     return None, RuntimeError(
                         "No LLM client configured. Run /login first."
                     )
-                
-                kwargs["stream"] = True
-                kwargs["stream_options"] = {"include_usage": True}
-
-                try:
-                    stream = self.client.chat.completions.create(**kwargs)
-                except Exception as e:
-                    if "stream_options" in kwargs:
-                        del kwargs["stream_options"]
-                        stream = self.client.chat.completions.create(**kwargs)
-                    else:
-                        raise e
-
-                content_parts = []
-                reasoning_parts = []
-                tool_calls_map = {}
-                usage_obj = None
-
-                print_thinking_header = False
-                print_content_header = False
-                loading_active = False
-
-                def _get_val(obj, key, default=None):
-                    if isinstance(obj, dict):
-                        return obj.get(key, default)
-                    return getattr(obj, key, default)
-
-                for chunk in stream:
-                    current_usage = _get_val(chunk, "usage")
-                    if current_usage:
-                        usage_obj = current_usage
-
-                    choices = _get_val(chunk, "choices")
-                    if not choices:
-                        continue
-                    
-                    delta = _get_val(choices[0], "delta")
-                    if not delta:
-                        continue
-
-                    # Stream reasoning/thinking
-                    reasoning = _get_val(delta, "reasoning_content")
-                    if reasoning:
-                        if stream_to_ui:
-                            if loading_active:
-                                self.console.stop_loading()
-                                loading_active = False
-                            if not print_thinking_header:
-                                self.console.stream_thinking_start()
-                                print_thinking_header = True
-                            self.console.stream_thinking_chunk(reasoning)
-                        reasoning_parts.append(reasoning)
-
-                    # Stream normal response content
-                    content = _get_val(delta, "content")
-                    if content:
-                        if stream_to_ui:
-                            if print_thinking_header:
-                                self.console.stream_thinking_end()
-                                print_thinking_header = False
-                            if loading_active:
-                                self.console.stop_loading()
-                                loading_active = False
-                            if not print_content_header:
-                                self.console.stream_content_start()
-                                print_content_header = True
-                            self.console.stream_content_chunk(content)
-                        content_parts.append(content)
-
-                    # Stream tool calls (silently buffer arguments, update dynamic loading text)
-                    tool_calls = _get_val(delta, "tool_calls")
-                    if tool_calls:
-                        if print_thinking_header:
-                            self.console.stream_thinking_end()
-                            print_thinking_header = False
-                        if print_content_header:
-                            self.console.stream_content_end()
-                            print_content_header = False
-
-                        for tc in tool_calls:
-                            idx = _get_val(tc, "index")
-                            tc_id = _get_val(tc, "id")
-                            tc_function = _get_val(tc, "function")
-
-                            if idx not in tool_calls_map:
-                                tool_calls_map[idx] = {
-                                    "id": tc_id,
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""}
-                                }
-                            if tc_id:
-                                tool_calls_map[idx]["id"] = tc_id
-                            if tc_function:
-                                fn_name = _get_val(tc_function, "name")
-                                fn_args = _get_val(tc_function, "arguments")
-                                if fn_name:
-                                    tool_calls_map[idx]["function"]["name"] += fn_name
-                                if fn_args:
-                                    tool_calls_map[idx]["function"]["arguments"] += fn_args
-
-                            total_arg_bytes = sum(len(tc_data["function"]["arguments"]) for tc_data in tool_calls_map.values())
-                            kb = total_arg_bytes / 1024.0
-                            tool_names = ", ".join(tc_data["function"]["name"] or "tool" for tc_data in tool_calls_map.values())
-                            
-                            if not loading_active:
-                                self.console.start_loading(f"Generating arguments for {tool_names}... ({kb:.1f} KB)")
-                                loading_active = True
-                            else:
-                                self.console.update_loading_message(f"Generating arguments for {tool_names}... ({kb:.1f} KB)")
-
-                if print_thinking_header:
-                    self.console.stream_thinking_end()
-                if print_content_header:
-                    self.console.stream_content_end()
-                if loading_active:
-                    self.console.stop_loading()
-
-                # Reconstruct mock completion objects
-                final_tool_calls = []
-                for idx in sorted(tool_calls_map.keys()):
-                    tc_data = tool_calls_map[idx]
-                    
-                    class MockFunction:
-                        def __init__(self, name, arguments):
-                            self.name = name
-                            self.arguments = arguments
-
-                    class MockToolCall:
-                        def __init__(self, id, function):
-                            self.id = id
-                            self.type = "function"
-                            self.function = function
-                        def model_dump(self):
-                            return {
-                                "id": self.id,
-                                "type": "function",
-                                "function": {
-                                    "name": self.function.name,
-                                    "arguments": self.function.arguments
-                                }
-                            }
-
-                    fn = MockFunction(tc_data["function"]["name"], tc_data["function"]["arguments"])
-                    final_tool_calls.append(MockToolCall(tc_data["id"], fn))
-
-                class MockMessage:
-                    def __init__(self, content, reasoning_content, tool_calls):
-                        self.content = content
-                        self.reasoning_content = reasoning_content
-                        self.tool_calls = tool_calls
-
-                class MockChoice:
-                    def __init__(self, message):
-                        self.message = message
-
-                class MockResponse:
-                    def __init__(self, choices, usage=None):
-                        self.choices = choices
-                        self.usage = usage
-
-                # Estimate tokens locally if the streaming API endpoint omitted the usage payload
-                if usage_obj is None:
-                    msg_objs = []
-                    for m in messages:
-                        msg_objs.append(
-                            Message(
-                                role=Role.from_val(m.get("role")),
-                                content=m.get("content") or "",
-                                name=m.get("name"),
-                                tool_calls=m.get("tool_calls"),
-                                tool_call_id=m.get("tool_call_id")
-                            )
-                        )
-                    _, prompt_tokens, _ = count_messages(msg_objs, provider=self.config.provider)
-                    
-                    completion_msg = Message(
-                        role=Role.ASSISTANT,
-                        content="".join(content_parts)
-                    )
-                    _, completion_tokens, _ = count_messages([completion_msg], provider=self.config.provider)
-                    
-                    class EstimatedUsage:
-                        def __init__(self, prompt, completion):
-                            self.prompt_tokens = prompt
-                            self.completion_tokens = completion
-                            self.total_tokens = prompt + completion
-                            self.prompt_tokens_details = None
-                            self.cache_read_input_tokens = 0
-                    
-                    usage_obj = EstimatedUsage(prompt_tokens, completion_tokens)
-
-                msg = MockMessage(
-                    content="".join(content_parts) or None,
-                    reasoning_content="".join(reasoning_parts) or None,
-                    tool_calls=final_tool_calls if final_tool_calls else None
+                handler = _ConsoleStream(self.console) if stream_to_ui else None
+                response = self.llm.complete(
+                    messages,
+                    model=self.model_name,
+                    tools=TOOLS if use_tools else None,
+                    max_tokens=self.config.max_tokens,
+                    reasoning_effort=self.config.reasoning_effort,
+                    stream_handler=handler,
+                    count_usage=_estimate_usage,
                 )
-                msg.already_printed = True
-                choice = MockChoice(msg)
-                response = MockResponse([choice], usage=usage_obj)
                 return response, None
             except Exception as exc:
                 return None, exc
@@ -938,7 +754,7 @@ class Agent:
         if error is None:
             return response
 
-        if _is_rate_limit(error):
+        if self.llm and self.llm.is_rate_limit(error):
             new_key = rotate_provider_key(self.config.provider)
             if new_key:
                 self.apply_provider_runtime()
@@ -1060,18 +876,16 @@ class Agent:
     def send(self, user_query):
         return self.chat(user_query)
 
-    def create_model(self):
-        if not self.config.api_key:
-            return None
+    def create_model(self) -> LLMProvider | None:
         endpoint = (
             self.config.base_url
             or BUILTIN_PROVIDERS.get(self.config.provider, {}).get("base_url")
-            or "https://api.mistral.ai/v1"
+            or "https://api.openai.com/v1"
         )
-        return OpenAI(
+        return create_provider(
+            name=self.config.provider,
             api_key=self.config.api_key,
             base_url=endpoint,
-            
         )
     def check_and_request_permission(self, tool_name: str, target: str, action_details: str) -> bool:
         """Checks if permission is pre-approved, otherwise prompts the user with persistent options."""

@@ -12,6 +12,10 @@ load_dotenv()
 
 # Built-in OpenAI-compatible providers
 BUILTIN_PROVIDERS: dict[str, dict[str, str]] = {
+    "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "default_model": "gpt-4o",
+    },
     "mistral": {
         "base_url": "https://api.mistral.ai/v1",
         "default_model": "mistral-large-latest",
